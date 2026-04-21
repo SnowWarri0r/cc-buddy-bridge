@@ -5,6 +5,7 @@ from cc_buddy_bridge.protocol import (
     build_heartbeat,
     build_turn_event,
     encode,
+    sanitize_for_stick,
 )
 from cc_buddy_bridge.state import State
 
@@ -78,3 +79,61 @@ def test_line_assembler_empty_lines_ignored():
     la = LineAssembler()
     out = la.feed(b"\n\n\n")
     assert out == []
+
+
+# ---- sanitize_for_stick ----
+
+def test_sanitize_keeps_ascii_and_cjk():
+    assert sanitize_for_stick("hello 你好 world") == "hello 你好 world"
+
+
+def test_sanitize_keeps_bmp_symbols():
+    # › U+203A and ✓ U+2713 are in the BMP; we actively use them in entries.
+    assert sanitize_for_stick("› done ✓") == "› done ✓"
+
+
+def test_sanitize_strips_emoji():
+    # 🎮 is U+1F3AE (supplementary plane).
+    out = sanitize_for_stick("press A 🎮 now")
+    assert "🎮" not in out
+    assert "press A" in out and "now" in out
+
+
+def test_sanitize_strips_multiple_emojis():
+    out = sanitize_for_stick("🐾🎮🔴hello🌙")
+    assert not any(ord(c) >= 0x10000 for c in out)
+    assert "hello" in out
+
+
+def test_sanitize_strips_newlines_and_control_chars():
+    assert "\n" not in sanitize_for_stick("hello\nworld")
+    assert "\x00" not in sanitize_for_stick("hello\x00world")
+
+
+def test_sanitize_preserves_tab():
+    assert sanitize_for_stick("a\tb") == "a\tb"
+
+
+def test_sanitize_empty_string():
+    assert sanitize_for_stick("") == ""
+
+
+def test_heartbeat_sanitizes_prompt_hint():
+    s = State()
+    s.session_start("x")
+    s.permission_pending("x", "tid_1", "Bash", "echo '🎮 emoji here'")
+    hb = build_heartbeat(s)
+    assert "🎮" not in hb["prompt"]["hint"]
+
+
+def test_heartbeat_sanitizes_entries():
+    s = State()
+    s.add_entry("got 🐾 paw")
+    hb = build_heartbeat(s)
+    assert "🐾" not in hb["entries"][0]
+
+
+def test_turn_event_sanitizes_nested_content():
+    evt = build_turn_event("assistant", [{"type": "text", "text": "done 🎉"}])
+    assert evt is not None
+    assert "🎉" not in evt["content"][0]["text"]
