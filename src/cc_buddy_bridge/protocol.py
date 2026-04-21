@@ -27,6 +27,12 @@ TURN_EVENT_MAX_BYTES = 4096
 # Max chars per entry — keep the stick's line buffer happy.
 ENTRY_TEXT_MAX = 80
 
+# Replacement character used when we strip a codepoint the stick can't render.
+# Keep it to 1 ASCII char so it doesn't blow up byte budgets or fall into the
+# same trap the original codepoint would have (multi-byte UTF-8 sequences that
+# bitmap fonts can't map).
+UNRENDERABLE_REPLACEMENT = "?"
+
 
 def build_heartbeat(state: State, msg: Optional[str] = None) -> dict[str, Any]:
     """Build a heartbeat snapshot dict ready for json.dumps + b'\\n'."""
@@ -35,27 +41,42 @@ def build_heartbeat(state: State, msg: Optional[str] = None) -> dict[str, Any]:
         "total": state.total,
         "running": state.running_count,
         "waiting": state.waiting_count,
-        "msg": msg if msg is not None else _default_msg(state, pending),
-        "entries": [_format_entry(e.at, e.text) for e in state.entries],
+        "msg": sanitize_for_stick(msg if msg is not None else _default_msg(state, pending)),
+        "entries": [sanitize_for_stick(_format_entry(e.at, e.text)) for e in state.entries],
         "tokens": state.tokens_cumulative,
         "tokens_today": state.tokens_today,
     }
     if pending is not None:
         snapshot["prompt"] = {
-            "id": pending.tool_use_id,
-            "tool": pending.tool_name,
-            "hint": pending.hint[:120],
+            "id": pending.tool_use_id,  # tool_use_id is ASCII by construction
+            "tool": sanitize_for_stick(pending.tool_name),
+            "hint": sanitize_for_stick(pending.hint[:120]),
         }
     return snapshot
 
 
 def build_turn_event(role: str, content: list[dict[str, Any]]) -> Optional[dict[str, Any]]:
-    """Build a one-shot turn event. Returns None if it would exceed TURN_EVENT_MAX_BYTES."""
-    evt = {"evt": "turn", "role": role, "content": content}
+    """Build a one-shot turn event. Returns None if it would exceed TURN_EVENT_MAX_BYTES.
+
+    Recursively sanitizes string values inside the content array so the stick
+    doesn't receive glyphs its bitmap font can't render (which, empirically,
+    crashes the firmware)."""
+    evt = {"evt": "turn", "role": role, "content": _sanitize_content(content)}
     encoded = json.dumps(evt, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
     if len(encoded) > TURN_EVENT_MAX_BYTES:
         return None
     return evt
+
+
+def _sanitize_content(obj: Any) -> Any:
+    """Deep-copy helper that sanitizes every string leaf."""
+    if isinstance(obj, str):
+        return sanitize_for_stick(obj)
+    if isinstance(obj, list):
+        return [_sanitize_content(x) for x in obj]
+    if isinstance(obj, dict):
+        return {k: _sanitize_content(v) for k, v in obj.items()}
+    return obj
 
 
 def build_time_sync() -> dict[str, Any]:
@@ -103,6 +124,41 @@ class LineAssembler:
                 # Drop malformed line rather than poison the stream.
                 continue
         return out
+
+
+# ---- sanitization ----
+
+def sanitize_for_stick(text: str) -> str:
+    """Strip codepoints the stick's bitmap font can't render.
+
+    The claude-desktop-buddy firmware runs on an M5StickC Plus with a bitmap
+    font that empirically can't handle supplementary-plane codepoints (emojis
+    at U+10000+). Passing one through causes a firmware hard-reset and an
+    ugly reconnect loop.
+
+    We keep BMP codepoints (ASCII, extended Latin, CJK, common symbols like
+    ›/✓) and replace anything outside the BMP with '?'. Also strips
+    control characters except tab — the firmware's line-parser uses \\n as a
+    record separator, so preserving a literal \\n mid-string would be worse.
+    """
+    if not text:
+        return text
+    out = []
+    for ch in text:
+        cp = ord(ch)
+        if cp >= 0x10000:
+            # Supplementary plane — emojis, rare CJK extensions, etc.
+            out.append(UNRENDERABLE_REPLACEMENT)
+        elif cp < 0x20 and ch != "\t":
+            # C0 control characters other than tab — includes newline, which
+            # is the wire protocol's record terminator. Never forward it raw.
+            out.append(UNRENDERABLE_REPLACEMENT)
+        elif 0x7F <= cp <= 0x9F:
+            # DEL + C1 control characters.
+            out.append(UNRENDERABLE_REPLACEMENT)
+        else:
+            out.append(ch)
+    return "".join(out)
 
 
 # ---- internals ----
