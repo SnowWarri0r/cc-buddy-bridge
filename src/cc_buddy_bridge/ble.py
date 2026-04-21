@@ -31,7 +31,14 @@ log = logging.getLogger(__name__)
 # Default scan parameters.
 DEFAULT_NAME_PREFIX = "Claude"
 SCAN_TIMEOUT_SECS = 10.0
-RECONNECT_BACKOFF_SECS = 3.0
+
+# Exponential backoff for reconnection: if the device is resetting or rejecting
+# us, we don't want to hammer it. After each failure we double the wait up to
+# RECONNECT_BACKOFF_MAX; a successful connection that survives at least
+# STABLE_CONNECTION_SECS resets the backoff.
+RECONNECT_BACKOFF_BASE_SECS = 3.0
+RECONNECT_BACKOFF_MAX_SECS = 60.0
+STABLE_CONNECTION_SECS = 30.0
 
 # Handler for lines received from the stick (device → daemon).
 IncomingHandler = Callable[[dict[str, Any]], Awaitable[None]]
@@ -75,13 +82,20 @@ class BuddyBLE:
             return False
 
     async def run(self) -> None:
-        """Long-running connect/serve/reconnect loop. Exits when stop() is called."""
+        """Long-running connect/serve/reconnect loop. Exits when stop() is called.
+
+        Uses exponential backoff so a misbehaving peripheral (e.g. firmware in
+        a reset loop, bonding confusion) gets breathing room instead of being
+        hammered every 3 seconds."""
+        backoff = RECONNECT_BACKOFF_BASE_SECS
         while not self._stop.is_set():
+            connect_ts: float | None = None
             try:
                 device = await self._find_device()
                 if device is None:
-                    log.info("no buddy device found, retrying in %.1fs", RECONNECT_BACKOFF_SECS)
-                    await asyncio.sleep(RECONNECT_BACKOFF_SECS)
+                    log.info("no buddy device found, retrying in %.1fs", backoff)
+                    await asyncio.sleep(backoff)
+                    backoff = min(backoff * 2, RECONNECT_BACKOFF_MAX_SECS)
                     continue
                 log.info("connecting to %s (%s)", device.name, device.address)
                 async with BleakClient(device) as client:
@@ -89,17 +103,26 @@ class BuddyBLE:
                     self._assembler = LineAssembler()
                     await client.start_notify(NUS_TX_UUID, self._on_notify)
                     self._connected_evt.set()
+                    connect_ts = time.monotonic()
                     log.info("connected, subscribed to TX notify")
                     # Hold the connection open until it drops or we're told to stop.
                     while client.is_connected and not self._stop.is_set():
                         await asyncio.sleep(1.0)
+                    lifetime = time.monotonic() - connect_ts
+                    log.info("disconnected after %.1fs", lifetime)
             except Exception as e:  # noqa: BLE001
                 log.warning("ble connection error: %s", e)
             finally:
                 self._client = None
                 self._connected_evt.clear()
             if not self._stop.is_set():
-                await asyncio.sleep(RECONNECT_BACKOFF_SECS)
+                # Reset backoff if the last connection was stable for a while —
+                # a brief single disconnect shouldn't inherit flapping penalty.
+                if connect_ts is not None and (time.monotonic() - connect_ts) >= STABLE_CONNECTION_SECS:
+                    backoff = RECONNECT_BACKOFF_BASE_SECS
+                log.info("waiting %.1fs before reconnect", backoff)
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, RECONNECT_BACKOFF_MAX_SECS)
 
     async def stop(self) -> None:
         self._stop.set()
