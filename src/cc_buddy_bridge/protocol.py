@@ -136,35 +136,36 @@ class LineAssembler:
 # ---- sanitization ----
 
 def sanitize_for_stick(text: str) -> str:
-    """Strip codepoints the stick's bitmap font can't render.
+    """Strip anything the stick's bitmap font can't safely render.
 
-    The claude-desktop-buddy firmware runs on an M5StickC Plus with a bitmap
-    font that empirically can't handle supplementary-plane codepoints (emojis
-    at U+10000+). Passing one through causes a firmware hard-reset and an
-    ugly reconnect loop.
+    Initially we thought we only had to drop supplementary-plane codepoints
+    (emojis), because BMP chars like CJK "just rendered as empty boxes".
+    Empirical testing (2026-04-22) showed that's wrong: pushing entries
+    containing CJK UTF-8 bytes (``0xE9 0x87 0x8D`` for "重" etc.) reliably
+    disconnected the stick ~1s after the heartbeat write.
 
-    We keep BMP codepoints (ASCII, extended Latin, CJK, common symbols like
-    ›/✓) and replace anything outside the BMP with '?'. Also strips
-    control characters except tab — the firmware's line-parser uses \\n as a
-    record separator, so preserving a literal \\n mid-string would be worse.
+    Hypothesis: the firmware's Adafruit-GFX bitmap font table is ASCII-only,
+    so a multi-byte leading byte (0x80–0xFF) becomes an out-of-range index —
+    garbage reads in some paths, a hard fault in others. Either way, anything
+    non-ASCII is a poison pill.
+
+    Policy: keep only ASCII printable (``0x20``–``0x7E``) plus tab. Strip
+    everything else — control chars, high-bit bytes, CJK, fullwidth punct,
+    emojis — to '?'. Stable takes priority over expressiveness; a Chinese
+    entry becomes a row of '?'s which at least tells the viewer "something
+    happened".
     """
     if not text:
         return text
     out = []
     for ch in text:
         cp = ord(ch)
-        if cp >= 0x10000:
-            # Supplementary plane — emojis, rare CJK extensions, etc.
-            out.append(UNRENDERABLE_REPLACEMENT)
-        elif cp < 0x20 and ch != "\t":
-            # C0 control characters other than tab — includes newline, which
-            # is the wire protocol's record terminator. Never forward it raw.
-            out.append(UNRENDERABLE_REPLACEMENT)
-        elif 0x7F <= cp <= 0x9F:
-            # DEL + C1 control characters.
-            out.append(UNRENDERABLE_REPLACEMENT)
-        else:
+        if 0x20 <= cp <= 0x7E:
             out.append(ch)
+        elif ch == "\t":
+            out.append(ch)
+        else:
+            out.append(UNRENDERABLE_REPLACEMENT)
     return "".join(out)
 
 
