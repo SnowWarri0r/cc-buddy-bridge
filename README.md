@@ -1,5 +1,10 @@
 # cc-buddy-bridge
 
+[![License: MIT](https://img.shields.io/badge/license-MIT-yellow.svg)](LICENSE)
+[![Python: 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
+[![Status: MVP](https://img.shields.io/badge/status-MVP-orange.svg)](#status)
+[![PRs: Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/SnowWarri0r/cc-buddy-bridge/issues)
+
 Bridge [Claude Code](https://claude.com/claude-code) CLI sessions to the
 [claude-desktop-buddy](https://github.com/anthropics/claude-desktop-buddy) BLE
 hardware — without going through the Claude desktop app.
