@@ -15,6 +15,7 @@ from .protocol import (
     HEARTBEAT_KEEPALIVE,
     build_heartbeat,
     build_time_sync,
+    build_turn_event,
 )
 from .state import State
 
@@ -143,6 +144,11 @@ class Daemon:
             if isinstance(summary, str) and summary:
                 self.state.add_entry(summary[:80])
             await self._push_heartbeat()
+            # Fire-and-forget turn event so the stick can show the latest
+            # assistant response. Needs transcript_path (hook provides it).
+            transcript_path = req.get("transcript_path")
+            if isinstance(transcript_path, str) and transcript_path:
+                await self._emit_turn_event(transcript_path)
             return {"ok": True}
 
         if evt == "pretooluse":
@@ -245,3 +251,22 @@ class Daemon:
     async def _on_tokens(self, cumulative: int, today: int, _entries: list) -> None:
         self.state.set_tokens(cumulative, today)
         await self._push_heartbeat()
+
+    # ---- turn event ----
+
+    async def _emit_turn_event(self, transcript_path: str) -> None:
+        """Look up the last parsed assistant content for this session's transcript
+        and push a one-shot turn event over BLE. Silently skip if we don't have
+        content yet or if the event would exceed the 4 KB wire cap."""
+        if not self.ble.connected:
+            return
+        content = self.jsonl.last_assistant_content(transcript_path)
+        if not content:
+            log.debug("turn event: no assistant content yet for %s", transcript_path)
+            return
+        evt = build_turn_event("assistant", content)
+        if evt is None:
+            log.info("turn event dropped (payload > 4 KB)")
+            return
+        ok = await self.ble.send(evt)
+        log.info("turn event sent (%d block(s), ble=%s)", len(content), "ok" if ok else "fail")

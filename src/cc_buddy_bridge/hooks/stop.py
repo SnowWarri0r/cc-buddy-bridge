@@ -10,6 +10,7 @@ def main() -> int:
     post({
         "evt": "turn_end",
         "session_id": payload.get("session_id", ""),
+        "transcript_path": payload.get("transcript_path", ""),
     })
     return 0
 

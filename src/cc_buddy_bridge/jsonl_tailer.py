@@ -42,6 +42,9 @@ class JSONLTailer:
         # day_key → sum of tokens_today across files (day_key is YYYY-MM-DD local)
         self._day_key = _today_key()
         self._today_tokens_per_file: dict[str, int] = {}
+        # file path → last parsed assistant content array. Used by the daemon to
+        # emit a `turn` event over BLE when the Stop hook fires.
+        self._last_assistant_content: dict[str, list] = {}
 
     async def run(self) -> None:
         if not self.root.exists():
@@ -124,7 +127,16 @@ class JSONLTailer:
         # Claude Code transcript entries can nest differently across versions.
         # Check a few common shapes.
         msg = obj.get("message") if isinstance(obj.get("message"), dict) else obj
-        usage = msg.get("usage") if isinstance(msg, dict) else None
+        if not isinstance(msg, dict):
+            return
+
+        # Track the latest assistant content for turn-event emission.
+        if msg.get("role") == "assistant":
+            content = msg.get("content")
+            if isinstance(content, list):
+                self._last_assistant_content[path] = content
+
+        usage = msg.get("usage")
         if not isinstance(usage, dict):
             return
         out = int(usage.get("output_tokens") or 0)
@@ -143,6 +155,11 @@ class JSONLTailer:
         # Entries aren't implemented via tailer yet — hook events feed them directly.
         # Keeping the signature for future expansion.
         await self.on_update(cumulative, today, [])
+
+    def last_assistant_content(self, transcript_path: str) -> list | None:
+        """Return the most recently parsed assistant content array for a transcript,
+        or None if we haven't seen an assistant message in it yet."""
+        return self._last_assistant_content.get(transcript_path)
 
 
 def _today_key() -> str:
