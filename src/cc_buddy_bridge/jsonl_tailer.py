@@ -17,7 +17,7 @@ import os
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Optional
+from typing import Any, Awaitable, Callable, Optional  # Optional used below
 
 from watchfiles import Change, awatch
 
@@ -28,13 +28,23 @@ TRANSCRIPT_ROOT = Path.home() / ".claude" / "projects"
 # Callback: async (tokens_cumulative, tokens_today, new_entries: list[tuple[float,str]]) -> None
 TokensCallback = Callable[[int, int, list[tuple[float, str]]], Awaitable[None]]
 
+# Callback fired the moment a new assistant record with text content is parsed.
+# Async (transcript_path, text, uuid) -> None. Skipped for tool_use-only turns.
+AssistantTextCallback = Callable[[str, str, str], Awaitable[None]]
+
 
 class JSONLTailer:
     """Incrementally reads every transcript JSONL, tracks file offsets so we only
     process new bytes, and recomputes aggregates on change."""
 
-    def __init__(self, on_update: TokensCallback, root: Path = TRANSCRIPT_ROOT) -> None:
+    def __init__(
+        self,
+        on_update: TokensCallback,
+        root: Path = TRANSCRIPT_ROOT,
+        on_assistant_text: Optional[AssistantTextCallback] = None,
+    ) -> None:
         self.on_update = on_update
+        self.on_assistant_text = on_assistant_text
         self.root = root
         # file path → (offset, session_tokens_output, per_day_tokens_output)
         self._offsets: dict[str, int] = {}
@@ -45,6 +55,16 @@ class JSONLTailer:
         # file path → last parsed assistant content array. Used by the daemon to
         # emit a `turn` event over BLE when the Stop hook fires.
         self._last_assistant_content: dict[str, list] = {}
+        # file path → set of assistant uuids we've already emitted so that the
+        # initial sweep on daemon startup doesn't re-fire the callback for
+        # every historical assistant message.
+        self._emitted_assistant_uuids: dict[str, set[str]] = {}
+        # While True, the initial-sweep pass skips the live-emit callback so
+        # we don't spam the stick with dozens of past turns on daemon start.
+        self._initial_sweep_done = False
+        # Deferred callbacks collected during _consume_obj (which is sync).
+        # Fired from the awatch loop (async context).
+        self._pending_assistant_emits: list[tuple[str, str, str]] = []
 
     async def run(self) -> None:
         if not self.root.exists():
@@ -52,16 +72,58 @@ class JSONLTailer:
             self.root.mkdir(parents=True, exist_ok=True)
 
         # Initial sweep so aggregates are hot before any file event fires.
+        # Marked "sweep not done" so _consume_obj skips the live-emit callback
+        # during history replay; callbacks only fire for future writes.
         await self._initial_sweep()
+        self._initial_sweep_done = True
+        # Seed the "already emitted" set from history so that the first live
+        # event on each file doesn't fire unless it's genuinely new.
+        self._seed_emitted_from_history()
         await self._emit()
 
         # Watch for changes. watchfiles yields sets of (Change, path).
         try:
             async for changes in awatch(str(self.root), recursive=True, stop_event=None):
                 await self._handle_changes(changes)
+                await self._fire_pending_emits()
                 await self._emit()
         except Exception:  # noqa: BLE001
             log.exception("jsonl tailer crashed")
+
+    async def _fire_pending_emits(self) -> None:
+        if not self._pending_assistant_emits or self.on_assistant_text is None:
+            self._pending_assistant_emits.clear()
+            return
+        to_fire = self._pending_assistant_emits[:]
+        self._pending_assistant_emits.clear()
+        for path, text, uuid in to_fire:
+            try:
+                await self.on_assistant_text(path, text, uuid)
+            except Exception:  # noqa: BLE001
+                log.exception("on_assistant_text callback failed")
+
+    def _seed_emitted_from_history(self) -> None:
+        """After initial sweep, scan each transcript and record every assistant
+        uuid we've already processed so the live callback skips them."""
+        for path in self._offsets.keys():
+            try:
+                with open(path, "rb") as f:
+                    data = f.read()
+            except OSError:
+                continue
+            seen = self._emitted_assistant_uuids.setdefault(path, set())
+            for raw in data.splitlines():
+                if not raw.strip():
+                    continue
+                try:
+                    obj = json.loads(raw)
+                except ValueError:
+                    continue
+                msg = obj.get("message") if isinstance(obj.get("message"), dict) else obj
+                if isinstance(msg, dict) and msg.get("role") == "assistant":
+                    uuid = obj.get("uuid")
+                    if uuid:
+                        seen.add(uuid)
 
     async def _initial_sweep(self) -> None:
         for p in self.root.rglob("*.jsonl"):
@@ -135,6 +197,27 @@ class JSONLTailer:
             content = msg.get("content")
             if isinstance(content, list):
                 self._last_assistant_content[path] = content
+
+                # Fire live callback the moment a NEW assistant text record lands.
+                # Must happen after the initial sweep (we don't want to replay
+                # history on daemon startup) and only once per record uuid.
+                if self._initial_sweep_done and self.on_assistant_text is not None:
+                    record_uuid = obj.get("uuid") or ""
+                    if record_uuid:
+                        seen = self._emitted_assistant_uuids.setdefault(path, set())
+                        if record_uuid not in seen:
+                            for block in content:
+                                if (
+                                    isinstance(block, dict)
+                                    and block.get("type") == "text"
+                                    and isinstance(block.get("text"), str)
+                                    and block["text"].strip()
+                                ):
+                                    seen.add(record_uuid)
+                                    self._pending_assistant_emits.append(
+                                        (path, block["text"].strip(), record_uuid)
+                                    )
+                                    break
 
         usage = msg.get("usage")
         if not isinstance(usage, dict):

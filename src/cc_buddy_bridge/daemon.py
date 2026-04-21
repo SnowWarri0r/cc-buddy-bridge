@@ -43,7 +43,7 @@ class Daemon:
             name_prefix=device_name_prefix,
             address=device_address,
         )
-        self.jsonl = JSONLTailer(self._on_tokens)
+        self.jsonl = JSONLTailer(self._on_tokens, on_assistant_text=self._on_assistant_text)
         self.matchers = matchers if matchers is not None else load_matcher_config()
         # tool_use_id → Future resolving to "allow" | "deny"
         self._permission_futures: dict[str, asyncio.Future[str]] = {}
@@ -152,15 +152,10 @@ class Daemon:
 
         if evt == "turn_end":
             self.state.turn_end(req["session_id"])
-            summary = req.get("summary")
-            if isinstance(summary, str) and summary:
-                self.state.add_entry(summary[:80])
+            # Assistant text is no longer emitted from here — the JSONL tailer
+            # fires an entry as soon as the record lands (usually before Stop
+            # fires). Keeping turn_end just to flip the running flag.
             await self._push_heartbeat()
-            # Fire-and-forget turn event so the stick can show the latest
-            # assistant response. Needs transcript_path (hook provides it).
-            transcript_path = req.get("transcript_path")
-            if isinstance(transcript_path, str) and transcript_path:
-                await self._emit_turn_event(transcript_path)
             return {"ok": True}
 
         if evt == "pretooluse":
@@ -263,6 +258,17 @@ class Daemon:
     async def _on_tokens(self, cumulative: int, today: int, _entries: list) -> None:
         self.state.set_tokens(cumulative, today)
         await self._push_heartbeat()
+
+    async def _on_assistant_text(self, _transcript_path: str, text: str, _uuid: str) -> None:
+        """Fired by the JSONL tailer the moment a new assistant text record
+        lands on disk (typically <500 ms after Claude Code finishes the
+        message). Emitting here beats the Stop hook, so the stick receives
+        the '@ ...' entry while the user is still looking at the terminal —
+        before auto-off kicks in."""
+        self.state.add_entry(f"@ {text[:70]}")
+        log.info("tailer: new assistant text → entry added (state.entries=%d)",
+                 len(self.state.entries))
+        await self._push_heartbeat(force=True)
 
     # ---- turn event ----
 
