@@ -81,6 +81,23 @@ To remove the hooks:
 | `tokens`/`today`  | Sum of `usage.output_tokens` in JSONL     |
 | `turn` event      | `Stop` hook + last assistant message      |
 
+## What the stick can (and can't) display
+
+The claude-desktop-buddy firmware uses the M5StickC Plus's default Adafruit GFX
+5×7 bitmap font, which only ships with an ASCII glyph table. That has two
+consequences:
+
+| Codepoints | Behavior on stick | What we do |
+| --- | --- | --- |
+| ASCII printable (`0x20`–`0x7E`) | ✅ Renders fine | Forward as-is |
+| BMP symbols / CJK (`0x80`–`0xFFFF`) | Renders as a blank box — no crash | Forward as-is (you see *something* happened) |
+| Supplementary plane (`>= 0x10000`), mainly emojis | ❌ **Hard-resets the firmware** | Strip to `?` before sending |
+| C0 / C1 control chars (except tab) | Undefined; `\n` would break the line protocol | Strip to `?` |
+
+If you need readable Chinese / Japanese on the stick, you'd need a firmware
+change (load a CJK font pack into flash). This project stays on the CLI side —
+we just make sure nothing we send will crash the device.
+
 ## Status
 
 Early. MVP covers heartbeat + permission round-trip. Folder push (streaming GIF
