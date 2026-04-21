@@ -10,6 +10,7 @@ from typing import Any, Optional
 from .ble import BuddyBLE
 from .ipc import IPCServer
 from .jsonl_tailer import JSONLTailer
+from .matchers import MatcherConfig, classify_command, load_config as load_matcher_config
 from .protocol import (
     HEARTBEAT_KEEPALIVE,
     build_heartbeat,
@@ -32,6 +33,7 @@ class Daemon:
         socket_path: Optional[str] = None,
         device_name_prefix: str = "Claude",
         device_address: Optional[str] = None,
+        matchers: Optional[MatcherConfig] = None,
     ) -> None:
         self.state = State()
         self.ipc = IPCServer(self._handle_ipc, socket_path=socket_path) if socket_path else IPCServer(self._handle_ipc)
@@ -41,6 +43,7 @@ class Daemon:
             address=device_address,
         )
         self.jsonl = JSONLTailer(self._on_tokens)
+        self.matchers = matchers if matchers is not None else load_matcher_config()
         # tool_use_id → Future resolving to "allow" | "deny"
         self._permission_futures: dict[str, asyncio.Future[str]] = {}
         # Track last heartbeat to dedupe (avoid spamming BLE with identical snapshots).
@@ -164,12 +167,29 @@ class Daemon:
         tool_name = req.get("tool_name") or "tool"
         hint = req.get("hint") or ""
 
+        # Smart matcher: classify trivial / risky commands before the BLE round-trip.
+        # auto_allow → approve immediately, no stick prompt (keeps ls/cat fast).
+        # always_ask → force stick prompt even if Claude Code would auto-approve.
+        # default    → no decision, let Claude Code's native permission flow run.
+        decision_class = classify_command(hint, self.matchers)
+        if decision_class == "allow":
+            log.info("pretooluse for %s (%s): auto_allow match → allow", tool_name, hint[:60])
+            return {"ok": True, "decision": "allow"}
+
         # If BLE isn't connected, skip the round-trip and return no decision so
         # Claude Code's normal flow runs (respects user's auto/allow settings).
         if not self.ble.connected:
             log.info("pretooluse for %s: ble not connected, deferring to default flow", tool_name)
             return {"ok": True}
 
+        # Unknown commands don't force a button press — defer to Claude Code's
+        # native flow (which may auto-approve under `permissions.defaultMode=auto`).
+        # Only always_ask patterns surface on the stick.
+        if decision_class == "default":
+            log.info("pretooluse for %s (%s): no matcher → defer to default", tool_name, hint[:60])
+            return {"ok": True}
+
+        log.info("pretooluse for %s (%s): always_ask → forwarding to stick", tool_name, hint[:60])
         self.state.permission_pending(session_id, tool_use_id, tool_name, hint)
         fut: asyncio.Future[str] = asyncio.get_running_loop().create_future()
         self._permission_futures[tool_use_id] = fut
