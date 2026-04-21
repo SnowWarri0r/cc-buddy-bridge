@@ -44,6 +44,20 @@ def test_heartbeat_entries_formatted():
     assert hb["entries"][0].endswith(" hello world")
 
 
+def test_heartbeat_entries_on_wire_are_oldest_first():
+    """State keeps newest-first for cheap prepend; the wire format is reversed
+    so the firmware's ``lines[n-1]=newest`` assumption holds."""
+    s = State()
+    s.add_entry("oldest", at=0)
+    s.add_entry("middle", at=0)
+    s.add_entry("newest", at=0)
+    hb = build_heartbeat(s)
+    # On wire: oldest → middle → newest
+    assert hb["entries"][0].endswith(" oldest")
+    assert hb["entries"][1].endswith(" middle")
+    assert hb["entries"][2].endswith(" newest")
+
+
 def test_turn_event_size_cap():
     huge = [{"type": "text", "text": "x" * 5000}]
     assert build_turn_event("assistant", huge) is None

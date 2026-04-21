@@ -35,14 +35,21 @@ UNRENDERABLE_REPLACEMENT = "?"
 
 
 def build_heartbeat(state: State, msg: Optional[str] = None) -> dict[str, Any]:
-    """Build a heartbeat snapshot dict ready for json.dumps + b'\\n'."""
+    """Build a heartbeat snapshot dict ready for json.dumps + b'\\n'.
+
+    Entry order on the wire is **oldest-first**. The reference firmware's
+    drawHUD treats ``lines[n-1]`` as the newest (highlighted, shown at the
+    bottom of the 3-row HUD window); it'd otherwise hide our newest entry at
+    the top of its wrapped buffer. We keep ``state.entries`` newest-first
+    internally because that's cheaper to prepend to — reverse on serialize.
+    """
     pending = state.first_pending()
     snapshot: dict[str, Any] = {
         "total": state.total,
         "running": state.running_count,
         "waiting": state.waiting_count,
         "msg": sanitize_for_stick(msg if msg is not None else _default_msg(state, pending)),
-        "entries": [sanitize_for_stick(_format_entry(e.at, e.text)) for e in state.entries],
+        "entries": [sanitize_for_stick(_format_entry(e.at, e.text)) for e in reversed(state.entries)],
         "tokens": state.tokens_cumulative,
         "tokens_today": state.tokens_today,
     }
