@@ -125,11 +125,17 @@ class JSONLTailer:
         # Check a few common shapes.
         msg = obj.get("message") if isinstance(obj.get("message"), dict) else obj
         usage = msg.get("usage") if isinstance(msg, dict) else None
-        if isinstance(usage, dict):
-            out = int(usage.get("output_tokens") or 0)
-            if out:
-                self._tokens_per_file[path] = self._tokens_per_file.get(path, 0) + out
-                self._today_tokens_per_file[path] = self._today_tokens_per_file.get(path, 0) + out
+        if not isinstance(usage, dict):
+            return
+        out = int(usage.get("output_tokens") or 0)
+        if not out:
+            return
+        self._tokens_per_file[path] = self._tokens_per_file.get(path, 0) + out
+        # Only attribute to today's counter if the record's own timestamp falls
+        # within the current local day. Records without a timestamp contribute
+        # to cumulative only.
+        if _record_is_today(obj.get("timestamp"), current_day):
+            self._today_tokens_per_file[path] = self._today_tokens_per_file.get(path, 0) + out
 
     async def _emit(self) -> None:
         cumulative = sum(self._tokens_per_file.values())
@@ -141,3 +147,17 @@ class JSONLTailer:
 
 def _today_key() -> str:
     return datetime.now().astimezone().strftime("%Y-%m-%d")
+
+
+def _record_is_today(ts: Any, current_day: str) -> bool:
+    """Parse an ISO 8601 timestamp (optionally Z-suffixed) and return True if
+    it falls on the current local day. Claude Code writes timestamps in UTC
+    with a 'Z' suffix; we convert to local time before comparing."""
+    if not isinstance(ts, str) or not ts:
+        return False
+    try:
+        # fromisoformat doesn't accept a trailing 'Z' until 3.11; normalize.
+        dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    return dt.astimezone().strftime("%Y-%m-%d") == current_day
