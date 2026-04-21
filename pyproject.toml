@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cc-buddy-bridge"
+version = "0.1.0"
+description = "Bridge Claude Code CLI sessions to the claude-desktop-buddy BLE hardware (bypasses the desktop app)."
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Snow" }]
+requires-python = ">=3.11"
+keywords = ["claude-code", "ble", "hardware-buddy", "m5stick", "esp32"]
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+]
+dependencies = [
+    "bleak>=0.22",
+    "watchfiles>=0.21",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+cc-buddy-bridge = "cc_buddy_bridge.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
