@@ -257,9 +257,17 @@ class Daemon:
     async def _emit_turn_event(self, transcript_path: str) -> None:
         """Look up the last parsed assistant content for this session's transcript
         and push a one-shot turn event over BLE. Silently skip if we don't have
-        content yet or if the event would exceed the 4 KB wire cap."""
+        content yet or if the event would exceed the 4 KB wire cap.
+
+        Forces a synchronous read of the transcript first so we don't emit a
+        stale turn event if watchfiles hasn't delivered the post-turn write
+        notification yet."""
         if not self.ble.connected:
             return
+        try:
+            self.jsonl._process_file(transcript_path)
+        except Exception:  # noqa: BLE001 — best effort; fall back to cached content
+            log.debug("turn event: process_file failed for %s", transcript_path, exc_info=True)
         content = self.jsonl.last_assistant_content(transcript_path)
         if not content:
             log.debug("turn event: no assistant content yet for %s", transcript_path)
