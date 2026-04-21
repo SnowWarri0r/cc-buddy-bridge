@@ -1,0 +1,86 @@
+# cc-buddy-bridge
+
+Bridge [Claude Code](https://claude.com/claude-code) CLI sessions to the
+[claude-desktop-buddy](https://github.com/anthropics/claude-desktop-buddy) BLE
+hardware — without going through the Claude desktop app.
+
+The buddy firmware officially pairs with Claude for macOS/Windows. This project
+lets you drive the same hardware from a plain terminal running the `claude` CLI,
+so your desk pet reacts to CLI sessions: sleeps when idle, gets busy when a
+tool call runs, blinks when a permission prompt needs your attention, and lets
+you approve or deny right from the stick's buttons.
+
+## How it works
+
+```
+claude CLI ──PreToolUse/Stop/etc hooks──▶ Unix socket ──▶ daemon ──BLE NUS──▶ stick
+                                                           ▲
+                                                           └── tails ~/.claude/projects/*.jsonl
+                                                               for tokens & recent messages
+```
+
+* **Hooks** (configured in `~/.claude/settings.json`) fire on session lifecycle
+  events, tool calls, permission requests, and turn boundaries.
+* Each hook is a small Python script that posts the event payload to a local
+  **daemon** over a Unix socket.
+* The daemon aggregates per-session state (`total` / `running` / `waiting` /
+  `tokens` / `entries`) and pushes heartbeat snapshots to the stick over BLE
+  Nordic UART Service, speaking the same JSON wire format as the desktop app.
+* For permission prompts, the hook **blocks** until the stick's buttons decide
+  the outcome, then returns `allow` / `deny` to Claude Code.
+
+See [REFERENCE.md in the buddy firmware repo](https://github.com/anthropics/claude-desktop-buddy/blob/main/REFERENCE.md)
+for the full wire protocol.
+
+## Install
+
+```bash
+git clone https://github.com/SnowWarri0r/cc-buddy-bridge
+cd cc-buddy-bridge
+python3.12 -m venv .venv
+.venv/bin/pip install -e .
+
+# Register hooks into ~/.claude/settings.json (makes a .backup copy first):
+.venv/bin/cc-buddy-bridge install
+
+# In another terminal, start the daemon:
+.venv/bin/cc-buddy-bridge daemon
+```
+
+Then start any `claude` session. The daemon scans for a BLE device advertising
+a name starting with `Claude`, connects, and begins pushing state.
+
+To remove the hooks:
+
+```bash
+.venv/bin/cc-buddy-bridge uninstall
+```
+
+## Requirements
+
+* macOS 12+ / Linux with BlueZ (Windows untested)
+* Python 3.11+
+* A flashed claude-desktop-buddy device (M5StickC Plus)
+* Claude Code CLI
+
+## Signal mapping
+
+| Buddy field       | Source                                    |
+| ----------------- | ----------------------------------------- |
+| `total`           | `SessionStart` / `SessionEnd` hooks       |
+| `running`         | `UserPromptSubmit` → `Stop` hooks         |
+| `waiting`         | `PreToolUse` hook (while decision pending)|
+| `prompt`          | `PreToolUse` hook payload                 |
+| `msg`             | Derived summary of current state          |
+| `entries`         | Last N lines tailed from transcript JSONL |
+| `tokens`/`today`  | Sum of `usage.output_tokens` in JSONL     |
+| `turn` event      | `Stop` hook + last assistant message      |
+
+## Status
+
+Early. MVP covers heartbeat + permission round-trip. Folder push (streaming GIF
+character packs from the CLI) is not implemented yet.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
