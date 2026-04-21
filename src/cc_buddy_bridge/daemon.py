@@ -51,6 +51,11 @@ class Daemon:
         # entry. Used to distinguish "fresh turn" from "re-read old content"
         # when the transcript file hasn't been flushed yet.
         self._last_emitted_turn_key: dict[str, str] = {}
+        # session_id → task that'll flip running→0 after a grace window.
+        # Delays the turn_end so the stick's HUD stays drawn long enough to
+        # display the @-entry the tailer just emitted. See firmware's
+        # drawHUD/clocking gate in main.cpp.
+        self._pending_turn_ends: dict[str, asyncio.Task] = {}
         # Track last heartbeat to dedupe (avoid spamming BLE with identical snapshots).
         self._last_hb_serialized: Optional[str] = None
         self._last_hb_sent_at: float = 0.0
@@ -72,7 +77,11 @@ class Daemon:
         finally:
             for t in tasks:
                 t.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
+            for pend in list(self._pending_turn_ends.values()):
+                if not pend.done():
+                    pend.cancel()
+            await asyncio.gather(*tasks, *self._pending_turn_ends.values(),
+                                 return_exceptions=True)
             await self.ble.stop()
             await self.ipc.stop()
 
@@ -142,8 +151,13 @@ class Daemon:
             return {"ok": True}
 
         if evt == "turn_begin":
-            self.state.session_start(req["session_id"])  # idempotent
-            self.state.turn_begin(req["session_id"])
+            session_id = req["session_id"]
+            # A new user prompt cancels any pending deferred turn_end.
+            pending = self._pending_turn_ends.pop(session_id, None)
+            if pending is not None and not pending.done():
+                pending.cancel()
+            self.state.session_start(session_id)  # idempotent
+            self.state.turn_begin(session_id)
             prompt = req.get("prompt")
             if isinstance(prompt, str) and prompt:
                 self.state.add_entry(f"> {prompt[:60]}")
@@ -151,11 +165,19 @@ class Daemon:
             return {"ok": True}
 
         if evt == "turn_end":
-            self.state.turn_end(req["session_id"])
-            # Assistant text is no longer emitted from here — the JSONL tailer
-            # fires an entry as soon as the record lands (usually before Stop
-            # fires). Keeping turn_end just to flip the running flag.
-            await self._push_heartbeat()
+            # Don't flip running→0 immediately; the firmware enters clock mode
+            # as soon as running+waiting both hit zero, which blanks the
+            # transcript HUD before the user has a chance to read the entry
+            # we just added. Schedule the flip 15s out — long enough to read,
+            # short enough that idle really does clock. A new turn_begin
+            # cancels the scheduled task.
+            session_id = req["session_id"]
+            previous = self._pending_turn_ends.get(session_id)
+            if previous is not None and not previous.done():
+                previous.cancel()
+            self._pending_turn_ends[session_id] = asyncio.create_task(
+                self._deferred_turn_end(session_id, delay=15.0)
+            )
             return {"ok": True}
 
         if evt == "pretooluse":
@@ -269,6 +291,22 @@ class Daemon:
         log.info("tailer: new assistant text → entry added (state.entries=%d)",
                  len(self.state.entries))
         await self._push_heartbeat(force=True)
+
+    async def _deferred_turn_end(self, session_id: str, delay: float) -> None:
+        """Delay the state.turn_end so that running>0 keeps the firmware out of
+        clock mode long enough to render the @-entry the tailer just pushed."""
+        try:
+            await asyncio.sleep(delay)
+            self.state.turn_end(session_id)
+            await self._push_heartbeat()
+        except asyncio.CancelledError:
+            return
+        finally:
+            # Self-cleanup. If a new turn_begin already replaced the task, the
+            # pop returns that task instead — ignore the mismatch.
+            current = self._pending_turn_ends.get(session_id)
+            if current is not None and current.done():
+                self._pending_turn_ends.pop(session_id, None)
 
     # ---- turn event ----
 
