@@ -283,7 +283,15 @@ class Daemon:
         if not self.ble.connected:
             return
 
+        # Claude Code's transcript writes are async w.r.t. the Stop hook — the
+        # hook fires before the final assistant record hits disk. Sleep a beat
+        # so our first read sees the just-finished turn; then poll for up to
+        # another ~1.2s if that wasn't enough (e.g., long response still being
+        # serialized). Dedupe by content hash so we never re-emit the same turn.
+        await asyncio.sleep(1.0)
+
         import hashlib
+        import json as _json
         last_key = self._last_emitted_turn_key.get(transcript_path)
         content: list | None = None
         content_key: str | None = None
@@ -297,7 +305,6 @@ class Daemon:
             candidate = self.jsonl.last_assistant_content(transcript_path)
             if not candidate:
                 continue
-            import json as _json
             key = hashlib.md5(
                 _json.dumps(candidate, sort_keys=True, ensure_ascii=False).encode("utf-8")
             ).hexdigest()
@@ -308,7 +315,7 @@ class Daemon:
             log.debug("turn event: transcript content unchanged, retrying (attempt %d)", attempt + 1)
 
         if not content:
-            log.info("turn end: no fresh content after 1.2s of polling")
+            log.info("turn end: no fresh content after 1s warmup + 1.2s polling")
             return
 
         text = _first_text_block(content)
