@@ -47,6 +47,10 @@ class Daemon:
         self.matchers = matchers if matchers is not None else load_matcher_config()
         # tool_use_id → Future resolving to "allow" | "deny"
         self._permission_futures: dict[str, asyncio.Future[str]] = {}
+        # transcript_path → hash of the last assistant content we emitted as an
+        # entry. Used to distinguish "fresh turn" from "re-read old content"
+        # when the transcript file hasn't been flushed yet.
+        self._last_emitted_turn_key: dict[str, str] = {}
         # Track last heartbeat to dedupe (avoid spamming BLE with identical snapshots).
         self._last_hb_serialized: Optional[str] = None
         self._last_hb_sent_at: float = 0.0
@@ -96,10 +100,18 @@ class Daemon:
         if not (force or changed or stale):
             return
         if self.ble.connected:
+            log.debug(
+                "heartbeat: %d bytes, entries=%d (last=%r), force=%s, changed=%s",
+                len(serialized), len(snap.get("entries", [])),
+                snap["entries"][-1] if snap.get("entries") else None,
+                force, changed,
+            )
             ok = await self.ble.send(snap)
             if ok:
                 self._last_hb_serialized = serialized
                 self._last_hb_sent_at = now
+            else:
+                log.warning("heartbeat: ble.send returned failure")
 
     async def _on_ble_connected(self) -> None:
         """On every (re)connect, emit time sync + force a heartbeat."""
@@ -256,44 +268,59 @@ class Daemon:
 
     async def _emit_turn_event(self, transcript_path: str) -> None:
         """On turn_end: mirror the latest assistant text into the heartbeat's
-        ``entries`` list (so the stick's transcript view shows it) and also
-        send a ``{"evt":"turn"}`` event over BLE.
+        ``entries`` list so the stick's transcript view shows it.
 
-        Note: the reference firmware's JSON parser
-        (claude-desktop-buddy/src/data.h:_applyJson) doesn't handle the ``evt``
-        field — it silently ignores anything beyond heartbeat snapshots. We
-        keep emitting the turn event anyway so future firmware revisions that
-        do handle it get correct data, but the user-visible effect today
-        comes from the synthetic entry we add below.
+        The reference firmware silently drops {"evt":"turn"} events (its JSON
+        parser only reads heartbeat fields), so the only thing that actually
+        shows up for the user is the synthetic entry we add below.
 
-        Forces a synchronous read of the transcript first so we don't act on
-        stale content if watchfiles hasn't delivered the post-turn write yet.
+        Polls for fresh content: Claude Code flushes assistant records to the
+        transcript JSONL *after* the Stop hook fires, so a naive read grabs
+        the PREVIOUS turn's content. We hash what we read and compare to the
+        last content we emitted; if unchanged, wait 200 ms and retry, up to
+        ~1.2 s total before giving up.
         """
         if not self.ble.connected:
             return
-        try:
-            self.jsonl._process_file(transcript_path)
-        except Exception:  # noqa: BLE001 — best effort; fall back to cached content
-            log.debug("turn event: process_file failed for %s", transcript_path, exc_info=True)
-        content = self.jsonl.last_assistant_content(transcript_path)
+
+        import hashlib
+        last_key = self._last_emitted_turn_key.get(transcript_path)
+        content: list | None = None
+        content_key: str | None = None
+        for attempt in range(6):
+            if attempt > 0:
+                await asyncio.sleep(0.2)
+            try:
+                self.jsonl._process_file(transcript_path)
+            except Exception:  # noqa: BLE001
+                log.debug("turn event: process_file failed", exc_info=True)
+            candidate = self.jsonl.last_assistant_content(transcript_path)
+            if not candidate:
+                continue
+            import json as _json
+            key = hashlib.md5(
+                _json.dumps(candidate, sort_keys=True, ensure_ascii=False).encode("utf-8")
+            ).hexdigest()
+            if key != last_key:
+                content = candidate
+                content_key = key
+                break
+            log.debug("turn event: transcript content unchanged, retrying (attempt %d)", attempt + 1)
+
         if not content:
-            log.debug("turn event: no assistant content yet for %s", transcript_path)
+            log.info("turn end: no fresh content after 1.2s of polling")
             return
 
-        # 1. Synthetic entry so the stick's existing transcript view shows this turn.
         text = _first_text_block(content)
         if text:
+            log.info("turn end: adding entry '@ %s...' (state.entries len before=%d)",
+                     text[:30], len(self.state.entries))
             self.state.add_entry(f"@ {text[:70]}")
             await self._push_heartbeat(force=True)
-
-        # 2. Forward-compatible turn event for future firmware that handles `evt`.
-        evt = build_turn_event("assistant", content)
-        if evt is None:
-            log.info("turn event dropped (payload > 4 KB)")
-            return
-        ok = await self.ble.send(evt)
-        log.info("turn end: entry added + turn event sent (%d block(s), ble=%s)",
-                 len(content), "ok" if ok else "fail")
+            if content_key is not None:
+                self._last_emitted_turn_key[transcript_path] = content_key
+        else:
+            log.info("turn end: content found but no text block, skipping entry add")
 
 
 def _first_text_block(content: list) -> str:
