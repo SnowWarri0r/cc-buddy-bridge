@@ -134,7 +134,7 @@ class Daemon:
             self.state.turn_begin(req["session_id"])
             prompt = req.get("prompt")
             if isinstance(prompt, str) and prompt:
-                self.state.add_entry(f"› {prompt[:60]}")
+                self.state.add_entry(f"> {prompt[:60]}")
             await self._push_heartbeat()
             return {"ok": True}
 
@@ -159,7 +159,7 @@ class Daemon:
             self.state.permission_resolved(req.get("tool_use_id", ""))
             tool_name = req.get("tool_name")
             if isinstance(tool_name, str):
-                self.state.add_entry(f"✓ {tool_name}")
+                self.state.add_entry(f"+ {tool_name}")
             await self._push_heartbeat()
             return {"ok": True}
 
@@ -283,7 +283,7 @@ class Daemon:
         # 1. Synthetic entry so the stick's existing transcript view shows this turn.
         text = _first_text_block(content)
         if text:
-            self.state.add_entry(f"◎ {text[:70]}")
+            self.state.add_entry(f"@ {text[:70]}")
             await self._push_heartbeat(force=True)
 
         # 2. Forward-compatible turn event for future firmware that handles `evt`.
