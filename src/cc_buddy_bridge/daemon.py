@@ -255,13 +255,20 @@ class Daemon:
     # ---- turn event ----
 
     async def _emit_turn_event(self, transcript_path: str) -> None:
-        """Look up the last parsed assistant content for this session's transcript
-        and push a one-shot turn event over BLE. Silently skip if we don't have
-        content yet or if the event would exceed the 4 KB wire cap.
+        """On turn_end: mirror the latest assistant text into the heartbeat's
+        ``entries`` list (so the stick's transcript view shows it) and also
+        send a ``{"evt":"turn"}`` event over BLE.
 
-        Forces a synchronous read of the transcript first so we don't emit a
-        stale turn event if watchfiles hasn't delivered the post-turn write
-        notification yet."""
+        Note: the reference firmware's JSON parser
+        (claude-desktop-buddy/src/data.h:_applyJson) doesn't handle the ``evt``
+        field — it silently ignores anything beyond heartbeat snapshots. We
+        keep emitting the turn event anyway so future firmware revisions that
+        do handle it get correct data, but the user-visible effect today
+        comes from the synthetic entry we add below.
+
+        Forces a synchronous read of the transcript first so we don't act on
+        stale content if watchfiles hasn't delivered the post-turn write yet.
+        """
         if not self.ble.connected:
             return
         try:
@@ -272,9 +279,31 @@ class Daemon:
         if not content:
             log.debug("turn event: no assistant content yet for %s", transcript_path)
             return
+
+        # 1. Synthetic entry so the stick's existing transcript view shows this turn.
+        text = _first_text_block(content)
+        if text:
+            self.state.add_entry(f"◎ {text[:70]}")
+            await self._push_heartbeat(force=True)
+
+        # 2. Forward-compatible turn event for future firmware that handles `evt`.
         evt = build_turn_event("assistant", content)
         if evt is None:
             log.info("turn event dropped (payload > 4 KB)")
             return
         ok = await self.ble.send(evt)
-        log.info("turn event sent (%d block(s), ble=%s)", len(content), "ok" if ok else "fail")
+        log.info("turn end: entry added + turn event sent (%d block(s), ble=%s)",
+                 len(content), "ok" if ok else "fail")
+
+
+def _first_text_block(content: list) -> str:
+    """Pull the first text block out of an SDK content array. Returns '' if
+    the turn was purely tool_use / tool_result (no natural-language reply)."""
+    for block in content:
+        if not isinstance(block, dict):
+            continue
+        if block.get("type") == "text":
+            text = block.get("text")
+            if isinstance(text, str) and text.strip():
+                return text.strip()
+    return ""
