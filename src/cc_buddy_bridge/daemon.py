@@ -224,16 +224,28 @@ class Daemon:
             log.info("pretooluse for %s (%s): no matcher → defer to default", tool_name, hint[:60])
             return {"ok": True}
 
-        log.info("pretooluse for %s (%s): always_ask → forwarding to stick", tool_name, hint[:60])
-        self.state.permission_pending(session_id, tool_use_id, tool_name, hint)
+        log.info(
+            "permission request: tool=%s id=%s hint=%r waiting up to %.0fs",
+            tool_name, tool_use_id, hint[:80], PERMISSION_WAIT_SECS,
+        )
+        pending = self.state.permission_pending(session_id, tool_use_id, tool_name, hint)
         fut: asyncio.Future[str] = asyncio.get_running_loop().create_future()
         self._permission_futures[tool_use_id] = fut
         try:
             await self._push_heartbeat(force=True)
             try:
                 decision = await asyncio.wait_for(fut, timeout=PERMISSION_WAIT_SECS)
+                elapsed = time.monotonic() - pending.issued_at
+                log.info(
+                    "permission resolved: id=%s decision=%s (%.1fs)",
+                    tool_use_id, decision, elapsed,
+                )
             except asyncio.TimeoutError:
-                log.warning("permission wait timed out for %s", tool_use_id)
+                elapsed = time.monotonic() - pending.issued_at
+                log.warning(
+                    "permission timeout: id=%s tool=%s after %.1fs → falling back to 'ask'",
+                    tool_use_id, tool_name, elapsed,
+                )
                 decision = "ask"
         finally:
             self._permission_futures.pop(tool_use_id, None)
@@ -255,9 +267,16 @@ class Daemon:
             mapped = "allow" if decision == "once" else "deny"
             fut = self._permission_futures.get(tool_use_id or "")
             if fut is not None and not fut.done():
+                log.info(
+                    "permission button press: id=%s → %s (stick sent %r)",
+                    tool_use_id, mapped, decision,
+                )
                 fut.set_result(mapped)
             else:
-                log.info("permission %s for unknown id=%s (already resolved?)", decision, tool_use_id)
+                log.info(
+                    "permission %s received for id=%s but no pending request (timed out or already resolved)",
+                    decision, tool_use_id,
+                )
             return
 
         if cmd == "status":
