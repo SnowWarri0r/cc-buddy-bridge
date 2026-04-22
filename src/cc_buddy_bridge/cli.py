@@ -5,11 +5,14 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import os
 import signal
+import socket
 import sys
 
 from . import __version__
 from .daemon import Daemon
+from .ipc import DEFAULT_SOCKET_PATH
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -52,6 +55,20 @@ def _run_daemon(args: argparse.Namespace) -> int:
         level=getattr(logging, args.log_level.upper(), logging.INFO),
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+
+    # Refuse to start if another daemon is already listening on this socket.
+    # A stale socket (file exists but nobody is accepting) is safe to remove
+    # and proceed. This prevents last night's "two daemons competing for the
+    # BLE connection" footgun.
+    socket_path = args.socket or DEFAULT_SOCKET_PATH
+    if _socket_in_use(socket_path):
+        print(
+            f"cc-buddy-bridge: another daemon is already listening at {socket_path}.\n"
+            f"  Stop it first, or pass --socket to use a different path.",
+            file=sys.stderr,
+        )
+        return 2
+
     daemon = Daemon(
         socket_path=args.socket,
         device_name_prefix=args.device_name,
@@ -77,6 +94,38 @@ def _run_daemon(args: argparse.Namespace) -> int:
     finally:
         loop.close()
     return 0
+
+
+def _socket_in_use(path: str) -> bool:
+    """True iff a process is actively accepting on ``path``.
+
+    A Unix socket file left over from a crash returns ECONNREFUSED on connect;
+    we remove the stale file and return False so the new daemon can bind.
+    """
+    if not os.path.exists(path):
+        return False
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    s.settimeout(0.5)
+    try:
+        s.connect(path)
+    except (ConnectionRefusedError, FileNotFoundError):
+        # Stale socket file — clean up and proceed.
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+        return False
+    except OSError:
+        # Some other error (permissions, socket unreadable). Be conservative
+        # and treat as in-use so we don't clobber something.
+        return True
+    else:
+        return True
+    finally:
+        try:
+            s.close()
+        except OSError:
+            pass
 
 
 if __name__ == "__main__":
