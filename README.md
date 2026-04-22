@@ -128,38 +128,122 @@ Sample output:
 
 ## Signal mapping
 
-| Buddy field       | Source                                    |
-| ----------------- | ----------------------------------------- |
-| `total`           | `SessionStart` / `SessionEnd` hooks       |
-| `running`         | `UserPromptSubmit` → `Stop` hooks         |
-| `waiting`         | `PreToolUse` hook (while decision pending)|
-| `prompt`          | `PreToolUse` hook payload                 |
-| `msg`             | Derived summary of current state          |
-| `entries`         | Last N lines tailed from transcript JSONL |
-| `tokens`/`today`  | Sum of `usage.output_tokens` in JSONL     |
-| `turn` event      | `Stop` hook + last assistant message      |
+| Buddy field       | Source                                        |
+| ----------------- | --------------------------------------------- |
+| `total`           | `SessionStart` / `SessionEnd` hooks           |
+| `running`         | `UserPromptSubmit` / deferred `Stop` hooks    |
+| `waiting`         | `PreToolUse` hook (while decision pending)    |
+| `prompt`          | `PreToolUse` hook payload                     |
+| `msg`             | Derived summary of current state              |
+| `entries`         | Live JSONL tailer (user prompts / tool calls / assistant text) |
+| `tokens`/`today`  | Sum of `usage.output_tokens` in JSONL         |
 
-## What the stick can (and can't) display
+## Firmware quirks we hit (and how we work around them)
 
-The claude-desktop-buddy firmware uses the M5StickC Plus's default Adafruit GFX
-5×7 bitmap font, which only ships with an ASCII glyph table. That has two
-consequences:
+The reference firmware has several sharp edges the wire protocol doesn't
+warn you about. Documenting them here so you don't re-debug them, and so
+the workarounds baked into this codebase have a visible rationale.
 
-| Codepoints | Behavior on stick | What we do |
-| --- | --- | --- |
-| ASCII printable (`0x20`–`0x7E`) | ✅ Renders fine | Forward as-is |
-| BMP symbols / CJK (`0x80`–`0xFFFF`) | Renders as a blank box — no crash | Forward as-is (you see *something* happened) |
-| Supplementary plane (`>= 0x10000`), mainly emojis | ❌ **Hard-resets the firmware** | Strip to `?` before sending |
-| C0 / C1 control chars (except tab) | Undefined; `\n` would break the line protocol | Strip to `?` |
+### 1. Non-ASCII bytes crash the BLE stack
 
-If you need readable Chinese / Japanese on the stick, you'd need a firmware
-change (load a CJK font pack into flash). This project stays on the CLI side —
-we just make sure nothing we send will crash the device.
+The 5×7 Adafruit GFX bitmap font table is ASCII-only; any byte in
+`0x80`–`0xFF` (i.e. every UTF-8 continuation byte and emoji leading
+byte) indexes past the glyph table and, in enough code paths, hard-
+resets the radio task within ~1 s of the heartbeat write.
+
+**Workaround:** `sanitize_for_stick()` in `protocol.py` rewrites
+everything outside `0x20`–`0x7E` (and tab) to `?` before sending. CJK
+users will see rows of `?` on the stick, which is lossy but stable.
+
+### 2. `entries` wire order is oldest-first, not newest-first
+
+Firmware's `drawHUD` treats `lines[nLines-1]` as the newest (and only
+that one gets the highlight colour + bottom-of-window position).
+Sending newest-first makes the latest entry land at the top of the
+wrapped buffer and clip out of the visible 3-row window.
+
+**Workaround:** the daemon keeps `state.entries` newest-first
+internally (cheap prepend) but `reversed()`-iterates when serializing
+the heartbeat.
+
+### 3. `evt:"turn"` events are silently discarded
+
+REFERENCE.md defines a `turn` event format, but the firmware's
+`_applyJson` only parses heartbeat fields (`time`, `total`, `running`,
+`waiting`, `tokens`, `tokens_today`, `msg`, `entries`, `prompt`). Any
+`evt` payload is parsed and dropped — no error, no display.
+
+**Workaround:** we mirror the assistant's first text block into the
+heartbeat's `entries` list as a synthetic `@ <text>` row. The firmware
+already renders `entries`, so no protocol extension is needed.
+
+### 4. Stop hook fires before the assistant record is flushed to disk
+
+Reading the transcript JSONL from the Stop hook returns the PREVIOUS
+turn's content — Claude Code's write to disk is async. Naively this
+causes every `@`-entry to be one turn behind.
+
+**Workaround:** we ignore Stop for content extraction entirely. The
+JSONL tailer already watches transcript files via `watchfiles`; it
+fires an `on_assistant_text` callback the moment a new assistant
+record lands (typically <500 ms). The callback adds the entry
+immediately, so the stick shows the reply before the user even
+scrolls up in the terminal.
+
+### 5. Clock mode hides the transcript HUD on turn end
+
+The firmware enters clock-face mode the instant
+`running==0 && waiting==0 && on_USB_power`, bypassing `drawHUD`
+entirely. Our old `turn_end` handler flipped `running` to 0 the
+moment Claude finished — which made the freshly-emitted `@` entry
+invisible within the same frame.
+
+**Workaround:** `turn_end` schedules an `asyncio.Task` that sleeps
+15 seconds before flipping `running` to 0. A new `turn_begin` cancels
+the pending task. The stick stays on HUD long enough to read the
+reply, then goes to clock on genuine idle.
+
+### 6. LittleFS is not auto-formatted — `push-character` fails until factory reset
+
+Fresh firmware calls `LittleFS.begin(false)` (no format-on-fail), so an
+uninitialised partition mounts as 0/0 bytes. The only code path that
+calls `LittleFS.format()` is the on-device **factory reset** menu
+(hold **A** → settings → reset → factory reset → tap twice).
+
+`cc-buddy-bridge push-character` detects this via the status ack and
+logs an `ERROR` with the remediation hint. Factory reset is destructive
+(wipes settings, stats, bonds) but needed once per stick.
+
+### 7. `blueutil --unpair` is unreliable on modern macOS
+
+For a clean BLE pairing test you need to clear both sides' bonds.
+`blueutil` advertises `--unpair` as `EXPERIMENTAL`; on macOS Sonoma+
+it returns success without actually removing the cached LTK, and a
+subsequent reconnect fails with `CBErrorDomain Code=14 "Peer removed
+pairing information"`.
+
+**Workaround:** `cc-buddy-bridge unpair` clears the stick side over
+the encrypted channel, but the user has to manually open
+**System Settings → Bluetooth → Claude-5C66 → ⓘ → Forget This
+Device** on the macOS side. After that, the next reconnect triggers
+a fresh 6-digit passkey pairing.
 
 ## Status
 
-Early. MVP covers heartbeat + permission round-trip. Folder push (streaming GIF
-character packs from the CLI) is not implemented yet.
+MVP + stability work complete. Covered:
+
+* Heartbeat (counts, tokens, entries, pending prompt)
+* Permission round-trip (stick A/B buttons decide)
+* Smart matcher (auto-allow trivial Bash, always-ask risky)
+* Assistant text surfaced as `entries` via tailer (live, <500 ms)
+* Folder push (GIF character packs, flow-controlled per-chunk)
+* Status polling (battery %, link encryption, fs free)
+* Status-line `hud` subcommand (composes with claude-hud)
+* macOS launchd service (auto-start on login)
+* Exponential reconnect backoff + multi-daemon guard + resilient logging
+* Successful fresh BLE pairing test (MITM + bonding + DisplayOnly passkey)
+
+Remaining backlog: see open [issues](https://github.com/SnowWarri0r/cc-buddy-bridge/issues).
 
 ## License
 
