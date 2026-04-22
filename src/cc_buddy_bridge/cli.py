@@ -38,6 +38,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     sub.add_parser("status", help="Show install status")
 
+    p_hud = sub.add_parser(
+        "hud",
+        help="Print a one-line stick status summary (stdout; designed for Claude Code's statusLine)",
+    )
+    p_hud.add_argument("--ascii", action="store_true", help="ASCII-only output (no emoji)")
+    p_hud.add_argument("--socket", default=None, help="Unix socket path override")
+
     args = parser.parse_args(argv)
     if args.cmd is None:
         parser.print_help()
@@ -60,6 +67,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "status":
         from .installer import show_status
         return show_status()
+    if args.cmd == "hud":
+        from .hud import run as hud_run
+        return hud_run(ascii_only=args.ascii, socket_path=args.socket)
 
     return 1
 

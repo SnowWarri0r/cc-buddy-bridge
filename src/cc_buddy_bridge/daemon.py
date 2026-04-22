@@ -202,6 +202,26 @@ class Daemon:
         if evt == "pretooluse":
             return await self._handle_pretooluse(req)
 
+        if evt == "get_state":
+            # Queried by the `cc-buddy-bridge hud` subcommand (or anyone else
+            # who wants a one-shot snapshot). Kept small on purpose.
+            pending = self.state.first_pending()
+            return {
+                "ok": True,
+                "state": {
+                    "ble_connected": self.ble.connected,
+                    "sec": self._last_stick_sec,
+                    "battery_pct": self._last_stick_battery_pct,
+                    "total": self.state.total,
+                    "running": self.state.running_count,
+                    "waiting": self.state.waiting_count,
+                    "tokens_cumulative": self.state.tokens_cumulative,
+                    "tokens_today": self.state.tokens_today,
+                    "pending_tool": pending.tool_name if pending else None,
+                    "last_entry": self.state.entries[0].text if self.state.entries else "",
+                },
+            }
+
         if evt == "posttooluse":
             # Clear any lingering pending (defensive; normally cleared in _handle_pretooluse).
             self.state.permission_resolved(req.get("tool_use_id", ""))

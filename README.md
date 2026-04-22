@@ -88,6 +88,37 @@ Linux (systemd user unit) is tracked in
 [issue #4](https://github.com/SnowWarri0r/cc-buddy-bridge/issues/4); help
 wanted.
 
+### Show the stick's state in Claude Code's status line
+
+`cc-buddy-bridge hud` prints a compact one-line summary (battery,
+encryption, pending prompts). Plug it into your `~/.claude/settings.json`:
+
+```json
+{
+  "statusLine": {
+    "type": "command",
+    "command": "/path/to/.venv/bin/cc-buddy-bridge hud"
+  }
+}
+```
+
+For an ASCII-only terminal: `cc-buddy-bridge hud --ascii`.
+
+Already using [claude-hud](https://github.com/jarrodwatts/claude-hud) or
+another statusline plugin? You can compose both — wrap them in a small
+shell script and concatenate outputs; statusLine accepts multi-line
+responses.
+
+Sample output:
+
+```
+🐾 🔋 96% 🔒              # healthy, encrypted link
+🐾 🔋 12% 🔒 2run         # low battery, sessions running
+🐾 ⚠ approve: Bash        # permission prompt waiting on the stick
+🐾 ∅                      # stick disconnected (but daemon is alive)
+🐾 off                    # daemon not running
+```
+
 ## Requirements
 
 * macOS 12+ / Linux with BlueZ (Windows untested)
