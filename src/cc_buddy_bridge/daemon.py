@@ -202,6 +202,17 @@ class Daemon:
         if evt == "pretooluse":
             return await self._handle_pretooluse(req)
 
+        if evt == "unpair":
+            # Tell the stick to erase its stored bond so the next pairing
+            # shows a fresh passkey (REFERENCE.md §Security and pairing).
+            # Macos side still needs a manual 'Forget' from System Settings.
+            if not self.ble.connected:
+                return {"ok": False, "error": "ble not connected"}
+            ok = await self.ble.send({"cmd": "unpair"})
+            log.info("unpair: sent cmd:unpair to stick (ble write %s)",
+                     "ok" if ok else "fail")
+            return {"ok": bool(ok)}
+
         if evt == "get_state":
             # Queried by the `cc-buddy-bridge hud` subcommand (or anyone else
             # who wants a one-shot snapshot). Kept small on purpose.

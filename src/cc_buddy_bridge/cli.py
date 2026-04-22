@@ -45,6 +45,11 @@ def main(argv: list[str] | None = None) -> int:
     p_hud.add_argument("--ascii", action="store_true", help="ASCII-only output (no emoji)")
     p_hud.add_argument("--socket", default=None, help="Unix socket path override")
 
+    sub.add_parser(
+        "unpair",
+        help="Clear the stick's stored BLE bond (you must also Forget on the macOS side afterwards)",
+    )
+
     args = parser.parse_args(argv)
     if args.cmd is None:
         parser.print_help()
@@ -70,6 +75,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "hud":
         from .hud import run as hud_run
         return hud_run(ascii_only=args.ascii, socket_path=args.socket)
+    if args.cmd == "unpair":
+        return _run_unpair()
 
     return 1
 
@@ -117,6 +124,34 @@ def _run_daemon(args: argparse.Namespace) -> int:
         pass
     finally:
         loop.close()
+    return 0
+
+
+def _run_unpair() -> int:
+    """Tell the running daemon to send cmd:unpair to the stick."""
+    from .hooks._client import post
+
+    resp = post({"evt": "unpair"}, timeout=2.0)
+    if resp is None:
+        print(
+            "cc-buddy-bridge: daemon not reachable. Start it with "
+            "`cc-buddy-bridge daemon` (or via the launchd agent).",
+            file=sys.stderr,
+        )
+        return 2
+    if not resp.get("ok"):
+        err = resp.get("error", "unknown")
+        print(f"cc-buddy-bridge: unpair failed ({err})", file=sys.stderr)
+        return 2
+
+    print("sent cmd:unpair to the stick — its stored bond is cleared.")
+    print("")
+    print("Next: open macOS System Settings → Bluetooth → Claude-5C66 → ⓘ →")
+    print("'Forget This Device' to purge the cached LTK. Then the next reconnect")
+    print("will prompt for a fresh 6-digit passkey (displayed on the stick).")
+    print("")
+    print("Watch `tail -f ~/Library/Logs/cc-buddy-bridge.log` for the moment of truth:")
+    print("  \"stick link: ENCRYPTED (was None)\"")
     return 0
 
 
