@@ -62,6 +62,32 @@ To remove the hooks:
 .venv/bin/cc-buddy-bridge uninstall
 ```
 
+### Auto-start on login (macOS)
+
+Instead of running `cc-buddy-bridge daemon` manually, install it as a
+user-level launchd agent so it starts at login and restarts on crashes:
+
+```bash
+.venv/bin/cc-buddy-bridge install --service
+```
+
+This writes `~/Library/LaunchAgents/com.github.cc-buddy-bridge.daemon.plist`
+pointed at the venv Python you just installed from, runs it immediately via
+`launchctl load`, and redirects stdout/stderr to
+`~/Library/Logs/cc-buddy-bridge.log`.
+
+To remove it:
+
+```bash
+.venv/bin/cc-buddy-bridge uninstall --service
+```
+
+`cc-buddy-bridge status` reports both hook and service status.
+
+Linux (systemd user unit) is tracked in
+[issue #4](https://github.com/SnowWarri0r/cc-buddy-bridge/issues/4); help
+wanted.
+
 ## Requirements
 
 * macOS 12+ / Linux with BlueZ (Windows untested)

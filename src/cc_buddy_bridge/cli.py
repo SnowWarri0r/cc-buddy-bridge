@@ -26,8 +26,16 @@ def main(argv: list[str] | None = None) -> int:
     p_daemon.add_argument("--device-address", default=None, help="BLE address to connect to (skips scan)")
     p_daemon.add_argument("--log-level", default="INFO")
 
-    sub.add_parser("install", help="Register hooks in ~/.claude/settings.json")
-    sub.add_parser("uninstall", help="Remove cc-buddy-bridge hooks from ~/.claude/settings.json")
+    p_install = sub.add_parser("install", help="Register hooks in ~/.claude/settings.json")
+    p_install.add_argument(
+        "--service", action="store_true",
+        help="Install as a macOS launchd agent (daemon auto-starts on login) instead of registering hooks",
+    )
+    p_uninstall = sub.add_parser("uninstall", help="Remove cc-buddy-bridge hooks from ~/.claude/settings.json")
+    p_uninstall.add_argument(
+        "--service", action="store_true",
+        help="Remove the macOS launchd agent instead of removing hooks",
+    )
     sub.add_parser("status", help="Show install status")
 
     args = parser.parse_args(argv)
@@ -38,9 +46,15 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "daemon":
         return _run_daemon(args)
     if args.cmd == "install":
+        if getattr(args, "service", False):
+            from .service import install_service
+            return install_service()
         from .installer import install_hooks
         return install_hooks()
     if args.cmd == "uninstall":
+        if getattr(args, "service", False):
+            from .service import uninstall_service
+            return uninstall_service()
         from .installer import uninstall_hooks
         return uninstall_hooks()
     if args.cmd == "status":

@@ -162,25 +162,39 @@ def uninstall_hooks() -> int:
 
 
 def show_status() -> int:
+    print("Hooks:")
     if not SETTINGS_PATH.exists():
-        print(f"settings.json not found at {SETTINGS_PATH}")
-        return 0
-    data = _load_settings()
-    hooks = data.get("hooks") or {}
-    any_installed = False
-    for event, entries in hooks.items():
-        if not isinstance(entries, list):
-            continue
-        for group in entries:
-            if not isinstance(group, dict):
+        print(f"  settings.json not found at {SETTINGS_PATH}")
+    else:
+        data = _load_settings()
+        hooks = data.get("hooks") or {}
+        any_installed = False
+        for event, entries in hooks.items():
+            if not isinstance(entries, list):
                 continue
-            for h in group.get("hooks") or []:
-                if _is_our_entry(h):
-                    any_installed = True
-                    matcher = group.get("matcher", "*")
-                    print(f"  {event} [{matcher}] → {h.get('command')}")
-    if not any_installed:
-        print("no cc-buddy-bridge hooks installed")
+            for group in entries:
+                if not isinstance(group, dict):
+                    continue
+                for h in group.get("hooks") or []:
+                    if _is_our_entry(h):
+                        any_installed = True
+                        matcher = group.get("matcher", "*")
+                        print(f"  {event} [{matcher}] → {h.get('command')}")
+        if not any_installed:
+            print("  no cc-buddy-bridge hooks installed")
+
+    print("\nService (macOS launchd):")
+    try:
+        from . import service
+    except ImportError:
+        print("  (service module unavailable)")
+        return 0
+    if not service.is_installed():
+        print("  not installed (run `cc-buddy-bridge install --service` to add)")
+    else:
+        loaded = "loaded" if service.is_loaded() else "installed but not loaded"
+        print(f"  {loaded}: {service.PLIST_PATH}")
+        print(f"  logs: {service.LOG_PATH}")
     return 0
 
 
