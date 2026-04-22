@@ -17,6 +17,44 @@ from typing import Any, Optional
 
 from .ipc import DEFAULT_SOCKET_PATH
 
+# Bar rendering. Keep the width compact — claude-hud already fills most of
+# the statusLine, and we need to fit next to it.
+BAR_WIDTH = 8
+BAR_FULL = "█"
+BAR_EMPTY = "░"
+
+# ANSI colour escapes. statusLine renders these; --ascii turns them off.
+_ANSI_RESET = "\033[0m"
+_ANSI_RED = "\033[31m"
+_ANSI_YELLOW = "\033[33m"
+_ANSI_GREEN = "\033[32m"
+
+
+def _bar(pct: int, width: int = BAR_WIDTH) -> str:
+    pct = max(0, min(100, int(pct)))
+    filled = (pct * width + 50) // 100  # round to nearest
+    return BAR_FULL * filled + BAR_EMPTY * (width - filled)
+
+
+def _battery_color(pct: int) -> str:
+    if pct <= 15:
+        return _ANSI_RED
+    if pct <= 40:
+        return _ANSI_YELLOW
+    return _ANSI_GREEN
+
+
+def _battery_segment(pct: Optional[int], *, ascii_only: bool) -> Optional[str]:
+    if not isinstance(pct, int):
+        return None
+    bar = _bar(pct)
+    if ascii_only:
+        # Fall back to plain ASCII; no colours, no low-batt icon.
+        return f"[{bar.replace(BAR_FULL, '=').replace(BAR_EMPTY, '-')}] {pct}%"
+    icon = "🪫" if pct <= 15 else "🔋"
+    color = _battery_color(pct)
+    return f"{icon} {color}{bar}{_ANSI_RESET} {pct}%"
+
 
 def _query_state(socket_path: str, timeout: float = 0.5) -> Optional[dict[str, Any]]:
     """Best-effort: return the daemon's state dict or None if anything fails."""
@@ -72,14 +110,10 @@ def format_line(state: Optional[dict[str, Any]], *, ascii_only: bool = False) ->
 
     parts: list[str] = []
 
-    # Battery, with warning threshold
-    pct = state.get("battery_pct")
-    if isinstance(pct, int):
-        if ascii_only:
-            parts.append(f"{pct}%")
-        else:
-            icon = "🪫" if pct <= 15 else "🔋"
-            parts.append(f"{icon} {pct}%")
+    # Battery — rendered as a short coloured progress bar. Red ≤15, yellow ≤40.
+    battery = _battery_segment(state.get("battery_pct"), ascii_only=ascii_only)
+    if battery is not None:
+        parts.append(battery)
 
     # Encryption
     sec = state.get("sec")

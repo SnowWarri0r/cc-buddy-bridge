@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from cc_buddy_bridge.hud import format_line
+from cc_buddy_bridge.hud import BAR_EMPTY, BAR_FULL, BAR_WIDTH, _bar, format_line
 
 
 def test_format_none_state():
@@ -38,10 +38,12 @@ def test_format_full_state():
     }
     out = format_line(state)
     assert "96%" in out
+    assert BAR_FULL in out  # the battery bar rendered
     assert "🔒" in out
     assert "2run" in out
     ascii_out = format_line(state, ascii_only=True)
     assert "96%" in ascii_out
+    assert "[" in ascii_out and "]" in ascii_out
     assert "lock" in ascii_out
     assert "2run" in ascii_out
 
@@ -49,7 +51,33 @@ def test_format_full_state():
 def test_format_low_battery_icon():
     state = {"ble_connected": True, "sec": True, "battery_pct": 10}
     assert "🪫" in format_line(state)
-    assert "🔒" not in format_line(state) or "🪫" in format_line(state)  # both ok
+    # Low battery should be coloured red via ANSI.
+    assert "\033[31m" in format_line(state)
+
+
+def test_bar_rendering_endpoints():
+    assert _bar(0) == BAR_EMPTY * BAR_WIDTH
+    assert _bar(100) == BAR_FULL * BAR_WIDTH
+
+
+def test_bar_rendering_middle():
+    # 50% should be roughly half full.
+    bar = _bar(50)
+    assert bar.count(BAR_FULL) == BAR_WIDTH // 2
+    assert bar.count(BAR_EMPTY) == BAR_WIDTH // 2
+
+
+def test_bar_clamps_out_of_range():
+    assert _bar(-10) == BAR_EMPTY * BAR_WIDTH
+    assert _bar(200) == BAR_FULL * BAR_WIDTH
+
+
+def test_ascii_bar_uses_ascii_chars_only():
+    state = {"ble_connected": True, "sec": True, "battery_pct": 60}
+    ascii_out = format_line(state, ascii_only=True)
+    assert BAR_FULL not in ascii_out
+    assert BAR_EMPTY not in ascii_out
+    assert "=" in ascii_out or "-" in ascii_out
 
 
 def test_format_unencrypted_warns():
