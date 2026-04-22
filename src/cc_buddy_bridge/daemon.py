@@ -59,6 +59,9 @@ class Daemon:
         # Cached stick-side status fields from the most recent status ack.
         self._last_stick_sec: Optional[bool] = None
         self._last_stick_battery_pct: Optional[int] = None
+        # Futures awaiting a specific ack type. Used by folder_push's
+        # chunk-by-chunk flow control. Each entry: (ack_type, Future).
+        self._ack_waiters: list[tuple[str, asyncio.Future]] = []
         # Track last heartbeat to dedupe (avoid spamming BLE with identical snapshots).
         self._last_hb_serialized: Optional[str] = None
         self._last_hb_sent_at: float = 0.0
@@ -201,6 +204,20 @@ class Daemon:
 
         if evt == "pretooluse":
             return await self._handle_pretooluse(req)
+
+        if evt == "push_character":
+            path = req.get("path")
+            if not isinstance(path, str) or not path:
+                return {"ok": False, "error": "missing 'path'"}
+            if not self.ble.connected:
+                return {"ok": False, "error": "ble not connected"}
+            try:
+                from .folder_push import push_character
+                result = await push_character(self, path)
+            except Exception as e:  # noqa: BLE001
+                log.exception("push_character failed")
+                return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+            return {"ok": True, **result}
 
         if evt == "unpair":
             # Tell the stick to erase its stored bond so the next pairing
@@ -352,6 +369,16 @@ class Daemon:
                     self._last_stick_battery_pct = pct
             return
 
+        # Route any ack (status already handled above, but others — char_begin,
+        # file, chunk, file_end, char_end, name, owner, unpair, etc.) to the
+        # oldest waiter that registered for that ack type.
+        if ack is not None:
+            for waiter_type, fut in self._ack_waiters:
+                if waiter_type == ack and not fut.done():
+                    fut.set_result(obj)
+                    break
+            return
+
         if cmd in {"name", "owner", "unpair", "char_begin", "char_end", "file", "file_end", "chunk"}:
             # We're the central; we don't send these, but acknowledge defensively.
             return
@@ -395,6 +422,21 @@ class Daemon:
                 self._pending_turn_ends.pop(session_id, None)
 
     # ---- turn event ----
+
+    async def wait_for_ack(self, ack_type: str, timeout: float = 5.0) -> dict[str, Any]:
+        """Block until we receive an ack matching ``ack_type``. Used by the
+        folder-push flow — the firmware requires a per-chunk ack before we
+        send the next chunk, since its UART RX buffer is only ~256 bytes."""
+        fut: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
+        entry = (ack_type, fut)
+        self._ack_waiters.append(entry)
+        try:
+            return await asyncio.wait_for(fut, timeout=timeout)
+        finally:
+            try:
+                self._ack_waiters.remove(entry)
+            except ValueError:
+                pass
 
     async def _emit_turn_event(self, transcript_path: str) -> None:
         """On turn_end: mirror the latest assistant text into the heartbeat's

@@ -50,6 +50,12 @@ def main(argv: list[str] | None = None) -> int:
         help="Clear the stick's stored BLE bond (you must also Forget on the macOS side afterwards)",
     )
 
+    p_push = sub.add_parser(
+        "push-character",
+        help="Upload a GIF character pack folder to the stick (manifest.json + *.gif)",
+    )
+    p_push.add_argument("path", help="Path to the character folder")
+
     args = parser.parse_args(argv)
     if args.cmd is None:
         parser.print_help()
@@ -77,6 +83,8 @@ def main(argv: list[str] | None = None) -> int:
         return hud_run(ascii_only=args.ascii, socket_path=args.socket)
     if args.cmd == "unpair":
         return _run_unpair()
+    if args.cmd == "push-character":
+        return _run_push_character(args.path)
 
     return 1
 
@@ -124,6 +132,30 @@ def _run_daemon(args: argparse.Namespace) -> int:
         pass
     finally:
         loop.close()
+    return 0
+
+
+def _run_push_character(path: str) -> int:
+    from .hooks._client import post
+
+    # Pushing a full 1.8 MB pack at BLE speeds can take 1-2 minutes with the
+    # per-chunk ack requirement. Give the IPC call plenty of headroom.
+    resp = post({"evt": "push_character", "path": path}, timeout=600.0)
+    if resp is None:
+        print(
+            "cc-buddy-bridge: daemon not reachable. Start it first.",
+            file=sys.stderr,
+        )
+        return 2
+    if not resp.get("ok"):
+        print(f"push failed: {resp.get('error', 'unknown')}", file=sys.stderr)
+        return 2
+
+    name = resp.get("name", "?")
+    files = resp.get("files", 0)
+    size = resp.get("total_bytes", 0)
+    print(f"pushed '{name}': {files} files, {size:,} bytes")
+    print("the stick has switched to the new character.")
     return 0
 
 
