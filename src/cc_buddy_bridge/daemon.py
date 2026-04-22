@@ -56,6 +56,9 @@ class Daemon:
         # display the @-entry the tailer just emitted. See firmware's
         # drawHUD/clocking gate in main.cpp.
         self._pending_turn_ends: dict[str, asyncio.Task] = {}
+        # Cached stick-side status fields from the most recent status ack.
+        self._last_stick_sec: Optional[bool] = None
+        self._last_stick_battery_pct: Optional[int] = None
         # Track last heartbeat to dedupe (avoid spamming BLE with identical snapshots).
         self._last_hb_serialized: Optional[str] = None
         self._last_hb_sent_at: float = 0.0
@@ -71,6 +74,7 @@ class Daemon:
             asyncio.create_task(self.jsonl.run(), name="jsonl"),
             asyncio.create_task(self._heartbeat_loop(), name="heartbeat"),
             asyncio.create_task(self._on_ble_connected(), name="on-connect"),
+            asyncio.create_task(self._status_poller(), name="status-poller"),
         ]
         try:
             await self._shutdown.wait()
@@ -123,14 +127,29 @@ class Daemon:
                 log.warning("heartbeat: ble.send returned failure")
 
     async def _on_ble_connected(self) -> None:
-        """On every (re)connect, emit time sync + force a heartbeat."""
+        """On every (re)connect, emit time sync + force a heartbeat + kick
+        a status poll so we learn the link's encryption state right away."""
         while not self._shutdown.is_set():
             await self.ble.wait_connected()
             await self.ble.send(build_time_sync())
             await self._push_heartbeat(force=True)
+            await self.ble.send({"cmd": "status"})
             # Wait for the connection to drop before waiting again.
             while self.ble.connected and not self._shutdown.is_set():
                 await asyncio.sleep(1.0)
+
+    async def _status_poller(self) -> None:
+        """Periodically ask the stick for its status so we track sec/battery.
+        Ack handling lives in _handle_ble (ack:"status" branch)."""
+        POLL_INTERVAL = 60.0
+        while not self._shutdown.is_set():
+            try:
+                await asyncio.wait_for(self._shutdown.wait(), timeout=POLL_INTERVAL)
+                return
+            except asyncio.TimeoutError:
+                pass
+            if self.ble.connected:
+                await self.ble.send({"cmd": "status"})
 
     # ---- IPC handler ----
 
@@ -279,10 +298,27 @@ class Daemon:
                 )
             return
 
-        if cmd == "status":
-            # Device is polling us; ack with a minimal status blob.
-            from .protocol import encode  # local import to avoid cycles
-            await self.ble.send({"ack": "status", "ok": True, "n": 0})
+        # Status acks come back from the device after we poll with {"cmd":"status"}.
+        # Shape per REFERENCE.md: {"ack":"status","ok":true,"data":{"name","sec","bat":{...},"sys":{...},"stats":{...}}}.
+        ack = obj.get("ack")
+        if ack == "status" and obj.get("ok"):
+            data = obj.get("data") or {}
+            sec = data.get("sec")
+            if sec is not None and sec != self._last_stick_sec:
+                log.info(
+                    "stick link: %s (was %s)",
+                    "ENCRYPTED" if sec else "UNENCRYPTED — transcript sniffable!",
+                    self._last_stick_sec,
+                )
+                self._last_stick_sec = bool(sec)
+            bat = data.get("bat") or {}
+            if isinstance(bat, dict) and bat:
+                pct = bat.get("pct")
+                ma = bat.get("mA")
+                if isinstance(pct, int) and pct != self._last_stick_battery_pct:
+                    charging = "+" if isinstance(ma, int) and ma < 0 else " "
+                    log.info("stick battery: %d%% %s", pct, charging)
+                    self._last_stick_battery_pct = pct
             return
 
         if cmd in {"name", "owner", "unpair", "char_begin", "char_end", "file", "file_end", "chunk"}:
