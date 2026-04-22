@@ -367,6 +367,25 @@ class Daemon:
                     charging = "+" if isinstance(ma, int) and ma < 0 else " "
                     log.info("stick battery: %d%% %s", pct, charging)
                     self._last_stick_battery_pct = pct
+            sys_info = data.get("sys") or {}
+            if isinstance(sys_info, dict):
+                free = sys_info.get("fsFree")
+                total = sys_info.get("fsTotal")
+                if isinstance(free, int) and isinstance(total, int):
+                    if total == 0:
+                        # LittleFS isn't mounted. Firmware calls begin(false),
+                        # so an un-formatted partition reports 0/0. push-character
+                        # will fail with "have 0K" until the user factory-resets
+                        # the stick (hold A → settings → reset → factory reset),
+                        # which runs LittleFS.format().
+                        log.error(
+                            "stick LittleFS appears unformatted (fsTotal=0). "
+                            "Run factory reset on the stick to format it; "
+                            "push-character will reject until then."
+                        )
+                    else:
+                        log.info("stick fs: %d/%d bytes free (%.0f%%)",
+                                 free, total, 100.0 * free / total)
             return
 
         # Route any ack (status already handled above, but others — char_begin,
