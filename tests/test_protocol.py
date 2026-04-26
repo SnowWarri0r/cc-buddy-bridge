@@ -20,6 +20,26 @@ def test_heartbeat_empty_state():
     assert "prompt" not in hb
 
 
+def test_heartbeat_omits_completed_when_idle():
+    s = State()
+    hb = build_heartbeat(s)
+    assert "completed" not in hb
+
+
+def test_heartbeat_includes_completed_during_pulse():
+    s = State()
+    s.pulse_completed(duration_secs=2.0)
+    hb = build_heartbeat(s)
+    assert hb.get("completed") is True
+
+
+def test_heartbeat_drops_completed_after_pulse_expires():
+    s = State()
+    s.pulse_completed(duration_secs=-1.0)  # already expired
+    hb = build_heartbeat(s)
+    assert "completed" not in hb
+
+
 def test_heartbeat_with_pending():
     s = State()
     s.session_start("x")

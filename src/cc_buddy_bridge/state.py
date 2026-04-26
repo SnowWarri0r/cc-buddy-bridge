@@ -46,6 +46,10 @@ class State:
         self.tokens_cumulative: int = 0
         self.tokens_today: int = 0
         self.tokens_day_key: str = _today_key()
+        # Monotonic timestamp until which heartbeats should carry
+        # ``completed: true`` — the firmware's celebrate-animation trigger.
+        # Pulsed by turn_end, observed by build_heartbeat.
+        self.completed_until: float = 0.0
 
     # ---- session lifecycle ----
 
@@ -117,6 +121,18 @@ class State:
         if not pendings:
             return None
         return min(pendings, key=lambda p: p.issued_at)
+
+    # ---- celebrate pulse ----
+
+    def pulse_completed(self, duration_secs: float = 5.0) -> None:
+        """Make subsequent heartbeats include ``completed: true`` for a few
+        seconds — firmware reads that field as the celebrate-animation
+        trigger (data.h:_applyJson → main.cpp:derive)."""
+        self.completed_until = time.monotonic() + duration_secs
+
+    @property
+    def is_celebrating(self) -> bool:
+        return time.monotonic() < self.completed_until
 
     # ---- entries ----
 

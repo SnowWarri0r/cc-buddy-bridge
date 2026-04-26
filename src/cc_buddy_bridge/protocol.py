@@ -53,6 +53,11 @@ def build_heartbeat(state: State, msg: Optional[str] = None) -> dict[str, Any]:
         "tokens": state.tokens_cumulative,
         "tokens_today": state.tokens_today,
     }
+    # Pulse the firmware's celebrate animation (confetti + bouncing) for the
+    # few seconds after a turn ends. Honoured by data.h:_applyJson which maps
+    # this field onto recentlyCompleted, picked up by main.cpp:derive.
+    if state.is_celebrating:
+        snapshot["completed"] = True
     if pending is not None:
         snapshot["prompt"] = {
             "id": pending.tool_use_id,  # tool_use_id is ASCII by construction

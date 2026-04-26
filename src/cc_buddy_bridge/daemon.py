@@ -178,6 +178,8 @@ class Daemon:
             pending = self._pending_turn_ends.pop(session_id, None)
             if pending is not None and not pending.done():
                 pending.cancel()
+            # Also kill any active celebrate pulse — user moved on.
+            self.state.completed_until = 0.0
             self.state.session_start(session_id)  # idempotent
             self.state.turn_begin(session_id)
             prompt = req.get("prompt")
@@ -200,9 +202,17 @@ class Daemon:
             self._pending_turn_ends[session_id] = asyncio.create_task(
                 self._deferred_turn_end(session_id, delay=15.0)
             )
-            # Fire a macOS notification so the user knows the terminal needs
-            # them again. Latest entry (typically the @-line just emitted by
-            # the tailer) goes in the subtitle — gives glanceable context.
+            # Trigger the firmware's celebrate animation for a few seconds.
+            # Force-push so the heartbeat carrying completed=true reaches the
+            # stick within ~50ms of the turn ending — animation lines up with
+            # the visual change in the terminal. Schedule a follow-up push at
+            # the pulse end so the animation stops exactly on time instead of
+            # waiting up to ~10s for the next keepalive.
+            CELEBRATE_SECS = 5.0
+            self.state.pulse_completed(duration_secs=CELEBRATE_SECS)
+            await self._push_heartbeat(force=True)
+            asyncio.create_task(self._heartbeat_after(CELEBRATE_SECS + 0.1))
+            # macOS-side banner + sound for when the user has tabbed away.
             from .notifier import notify_turn_complete
             subtitle = self.state.entries[0].text[:80] if self.state.entries else ""
             notify_turn_complete(subtitle=subtitle, session_id=session_id)
@@ -429,6 +439,16 @@ class Daemon:
         log.info("tailer: new assistant text → entry added (state.entries=%d)",
                  len(self.state.entries))
         await self._push_heartbeat(force=True)
+
+    async def _heartbeat_after(self, delay: float) -> None:
+        """Schedule one heartbeat push after ``delay`` seconds. Used by the
+        celebrate-pulse logic to flush the completed=false transition right
+        when the pulse expires, instead of waiting for the next keepalive."""
+        try:
+            await asyncio.sleep(delay)
+            await self._push_heartbeat(force=True)
+        except asyncio.CancelledError:
+            return
 
     async def _deferred_turn_end(self, session_id: str, delay: float) -> None:
         """Delay the state.turn_end so that running>0 keeps the firmware out of
