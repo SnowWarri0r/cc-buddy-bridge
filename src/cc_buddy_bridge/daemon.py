@@ -200,6 +200,12 @@ class Daemon:
             self._pending_turn_ends[session_id] = asyncio.create_task(
                 self._deferred_turn_end(session_id, delay=15.0)
             )
+            # Fire a macOS notification so the user knows the terminal needs
+            # them again. Latest entry (typically the @-line just emitted by
+            # the tailer) goes in the subtitle — gives glanceable context.
+            from .notifier import notify_turn_complete
+            subtitle = self.state.entries[0].text[:80] if self.state.entries else ""
+            notify_turn_complete(subtitle=subtitle, session_id=session_id)
             return {"ok": True}
 
         if evt == "pretooluse":
