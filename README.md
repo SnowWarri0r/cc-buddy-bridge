@@ -3,7 +3,7 @@
 [![test](https://github.com/SnowWarri0r/cc-buddy-bridge/actions/workflows/test.yml/badge.svg)](https://github.com/SnowWarri0r/cc-buddy-bridge/actions/workflows/test.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-yellow.svg)](LICENSE)
 [![Python: 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
-[![Status: MVP](https://img.shields.io/badge/status-MVP-orange.svg)](#status)
+[![Status: daily-driven](https://img.shields.io/badge/status-daily--driven-brightgreen.svg)](#status)
 [![PRs: Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/SnowWarri0r/cc-buddy-bridge/issues)
 
 Bridge [Claude Code](https://claude.com/claude-code) CLI sessions to the
@@ -230,20 +230,32 @@ a fresh 6-digit passkey pairing.
 
 ## Status
 
-MVP + stability work complete. Covered:
+Daily-driver complete. The author runs it on every Claude Code session.
 
-* Heartbeat (counts, tokens, entries, pending prompt)
-* Permission round-trip (stick A/B buttons decide)
-* Smart matcher (auto-allow trivial Bash, always-ask risky)
-* Assistant text surfaced as `entries` via tailer (live, <500 ms)
-* Folder push (GIF character packs, flow-controlled per-chunk)
-* Status polling (battery %, link encryption, fs free)
-* Status-line `hud` subcommand (composes with claude-hud)
-* macOS launchd service (auto-start on login)
+**Core protocol**
+
+* Heartbeat — sessions / tokens / entries / pending prompt
+* Permission round-trip — stick A/B buttons decide; signed back into Claude Code
+* Folder push — upload GIF character packs over BLE with flow control
+* Fresh BLE pairing — MITM + bonding + DisplayOnly passkey, end-to-end tested
+
+**Workflow**
+
+* Smart matcher — auto-allow trivial Bash (`ls`/`cat`/`grep`/...), always-ask risky (`rm`/`curl`/`git push`/...), defer the rest
+* Live assistant text — JSONL tailer fires entry-emit within ~500 ms of the message hitting disk; no Stop-hook lag
+* Turn-end notification — macOS Notification Center banner + Glass sound + stick `celebrate` animation, fires the moment a turn finishes
+* Status-line `hud` subcommand — emoji bar with battery progress, encryption, pending prompts; composes alongside claude-hud
+
+**Operations**
+
+* macOS launchd service — auto-start on login, restart on crash
+* Stick status polling — battery %, link encryption, fs free
 * Exponential reconnect backoff + multi-daemon guard + resilient logging
-* Successful fresh BLE pairing test (MITM + bonding + DisplayOnly passkey)
 
-Remaining backlog: see open [issues](https://github.com/SnowWarri0r/cc-buddy-bridge/issues).
+**Backlog**
+
+* Linux systemd user unit — see [issue #4](https://github.com/SnowWarri0r/cc-buddy-bridge/issues/4); help wanted
+* Anything else — open an issue
 
 ## License
 
