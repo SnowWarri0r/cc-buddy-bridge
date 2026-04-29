@@ -31,8 +31,15 @@ HOOK_DEFS: list[tuple[str, str, str | None, bool]] = [
 
 def _python_executable() -> str:
     """Prefer the Python that was used to install this package (keeps things working
-    when invoked via `cc-buddy-bridge install` from a venv)."""
-    return sys.executable
+    when invoked via `cc-buddy-bridge install` from a venv).
+
+    On Windows, convert backslashes to forward slashes for bash compatibility.
+    """
+    exe = sys.executable
+    if sys.platform == "win32":
+        # Convert Windows path to POSIX-style for bash
+        exe = exe.replace("\\", "/")
+    return exe
 
 
 def _hook_command(module: str) -> str:
