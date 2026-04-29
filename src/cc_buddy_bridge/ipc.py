@@ -1,6 +1,9 @@
-"""Unix-socket IPC between hook scripts and the daemon.
+"""IPC between hook scripts and the daemon.
 
 Protocol: line-delimited JSON, one request → one response, then close.
+
+On Unix: uses Unix domain sockets at /tmp/cc-buddy-bridge.sock
+On Windows: uses TCP socket at 127.0.0.1:<port>, port stored in %TEMP%\cc-buddy-bridge.port
 
 Request shapes (`evt` field discriminates):
   {"evt":"session_start","session_id":"...","transcript_path":"...","cwd":"..."}
@@ -22,15 +25,23 @@ import asyncio
 import json
 import logging
 import os
+import sys
+import tempfile
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 log = logging.getLogger(__name__)
 
-DEFAULT_SOCKET_PATH = os.environ.get(
-    "CC_BUDDY_BRIDGE_SOCK",
-    "/tmp/cc-buddy-bridge.sock",
-)
+if sys.platform == "win32":
+    DEFAULT_SOCKET_PATH = os.environ.get(
+        "CC_BUDDY_BRIDGE_SOCK",
+        str(Path(tempfile.gettempdir()) / "cc-buddy-bridge.port"),
+    )
+else:
+    DEFAULT_SOCKET_PATH = os.environ.get(
+        "CC_BUDDY_BRIDGE_SOCK",
+        "/tmp/cc-buddy-bridge.sock",
+    )
 
 
 # Handler signature: async (request_dict) -> response_dict.
@@ -42,15 +53,27 @@ class IPCServer:
         self.handler = handler
         self.socket_path = socket_path
         self._server: asyncio.AbstractServer | None = None
+        self._port: int | None = None
 
     async def start(self) -> None:
-        # Remove stale socket from a previous run.
         p = Path(self.socket_path)
         if p.exists():
             p.unlink()
-        self._server = await asyncio.start_unix_server(self._on_conn, path=self.socket_path)
-        os.chmod(self.socket_path, 0o600)  # user-only
-        log.info("ipc listening at %s", self.socket_path)
+
+        if sys.platform == "win32":
+            # Windows: use TCP socket on localhost
+            self._server = await asyncio.start_server(self._on_conn, "127.0.0.1", 0)
+            assert self._server.sockets
+            self._port = self._server.sockets[0].getsockname()[1]
+            # Write port to file for clients
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(str(self._port))
+            log.info("ipc listening at 127.0.0.1:%d (port file: %s)", self._port, self.socket_path)
+        else:
+            # Unix: use Unix domain socket
+            self._server = await asyncio.start_unix_server(self._on_conn, path=self.socket_path)
+            os.chmod(self.socket_path, 0o600)
+            log.info("ipc listening at %s", self.socket_path)
 
     async def serve_forever(self) -> None:
         assert self._server is not None
@@ -67,6 +90,7 @@ class IPCServer:
                 p.unlink()
             except OSError:
                 pass
+        self._port = None
 
     async def _on_conn(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         peer = writer.get_extra_info("peername")
