@@ -52,32 +52,16 @@ def test_plist_env_has_path_and_home():
     assert "PATH" in env and "/usr/bin" in env["PATH"]
 
 
-def test_install_refuses_on_unsupported_platform(monkeypatch, capsys):
-    monkeypatch.setattr(sys, "platform", "win32")
-    rc = service.install_service()
-    assert rc == 2
-    err = capsys.readouterr().err
-    assert "macOS and Linux" in err
-
-
-def test_uninstall_refuses_on_unsupported_platform(monkeypatch, capsys):
-    monkeypatch.setattr(sys, "platform", "win32")
-    rc = service.uninstall_service()
-    assert rc == 2
-    err = capsys.readouterr().err
-    assert "macOS and Linux" in err
-
-
 def test_backend_name_resolves_per_platform(monkeypatch):
     monkeypatch.setattr(sys, "platform", "darwin")
     assert service.backend_name() == "launchd"
     monkeypatch.setattr(sys, "platform", "linux")
     assert service.backend_name() == "systemd"
     monkeypatch.setattr(sys, "platform", "win32")
-    assert service.backend_name() is None
+    assert service.backend_name() == "task-scheduler"
 
 
-@pytest.mark.parametrize("platform", ["win32", "freebsd14"])
+@pytest.mark.parametrize("platform", ["freebsd14", "openbsd"])
 def test_is_installed_false_on_unsupported_platform(monkeypatch, platform):
     monkeypatch.setattr(sys, "platform", platform)
     assert service.is_installed() is False

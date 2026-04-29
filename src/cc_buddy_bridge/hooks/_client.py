@@ -1,7 +1,10 @@
-"""Tiny synchronous Unix-socket client used by hook scripts.
+"""Tiny synchronous client used by hook scripts.
 
 Hooks are short-lived subprocesses. We don't want to pay asyncio import cost
 for every tool call — a stdlib-only sync client is faster and cleaner.
+
+On Unix: connects to Unix domain socket
+On Windows: reads port from file and connects to TCP socket
 
 If the daemon is unreachable or slow, we return None so the caller can degrade
 gracefully (i.e., don't block Claude Code's normal flow).
@@ -13,12 +16,20 @@ import json
 import os
 import socket
 import sys
+import tempfile
+from pathlib import Path
 from typing import Any, Optional
 
-DEFAULT_SOCKET_PATH = os.environ.get(
-    "CC_BUDDY_BRIDGE_SOCK",
-    "/tmp/cc-buddy-bridge.sock",
-)
+if sys.platform == "win32":
+    DEFAULT_SOCKET_PATH = os.environ.get(
+        "CC_BUDDY_BRIDGE_SOCK",
+        str(Path(tempfile.gettempdir()) / "cc-buddy-bridge.port"),
+    )
+else:
+    DEFAULT_SOCKET_PATH = os.environ.get(
+        "CC_BUDDY_BRIDGE_SOCK",
+        "/tmp/cc-buddy-bridge.sock",
+    )
 
 # How long a hook is willing to wait for the daemon before giving up.
 # PreToolUse overrides this to a much larger value for the BLE round-trip.
@@ -45,9 +56,18 @@ def post(
     if not os.path.exists(socket_path):
         return None
     try:
-        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        s.settimeout(timeout)
-        s.connect(socket_path)
+        if sys.platform == "win32":
+            # Windows: read port from file and connect via TCP
+            port = int(Path(socket_path).read_text().strip())
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(timeout)
+            s.connect(("127.0.0.1", port))
+        else:
+            # Unix: connect via Unix domain socket
+            s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            s.settimeout(timeout)
+            s.connect(socket_path)
+
         s.sendall((json.dumps(event, ensure_ascii=False) + "\n").encode("utf-8"))
         # Read until newline.
         buf = bytearray()
@@ -59,7 +79,7 @@ def post(
             if b"\n" in buf:
                 break
         s.close()
-    except (OSError, socket.timeout):
+    except (OSError, socket.timeout, ValueError):
         return None
     line = bytes(buf).split(b"\n", 1)[0]
     if not line:

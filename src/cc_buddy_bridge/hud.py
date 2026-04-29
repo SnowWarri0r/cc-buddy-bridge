@@ -5,6 +5,9 @@ prints a compact line. Designed to complement claude-hud rather than
 replace it: we focus on the stick-specific signals (BLE connection,
 encryption, battery, pending button prompts) that Claude Code itself
 doesn't know about.
+
+On Unix: connects via Unix domain socket
+On Windows: reads port from file and connects via TCP
 """
 
 from __future__ import annotations
@@ -13,6 +16,7 @@ import json
 import select
 import socket
 import sys
+from pathlib import Path
 from typing import Any, Optional
 
 from .ipc import DEFAULT_SOCKET_PATH
@@ -59,9 +63,18 @@ def _battery_segment(pct: Optional[int], *, ascii_only: bool) -> Optional[str]:
 def _query_state(socket_path: str, timeout: float = 0.5) -> Optional[dict[str, Any]]:
     """Best-effort: return the daemon's state dict or None if anything fails."""
     try:
-        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        s.settimeout(timeout)
-        s.connect(socket_path)
+        if sys.platform == "win32":
+            # Windows: read port from file and connect via TCP
+            port = int(Path(socket_path).read_text().strip())
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(timeout)
+            s.connect(("127.0.0.1", port))
+        else:
+            # Unix: connect via Unix domain socket
+            s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            s.settimeout(timeout)
+            s.connect(socket_path)
+
         s.sendall(b'{"evt":"get_state"}\n')
         buf = bytearray()
         while True:
@@ -72,7 +85,7 @@ def _query_state(socket_path: str, timeout: float = 0.5) -> Optional[dict[str, A
             if b"\n" in buf:
                 break
         s.close()
-    except (OSError, socket.timeout):
+    except (OSError, socket.timeout, ValueError):
         return None
     line = bytes(buf).split(b"\n", 1)[0]
     if not line:

@@ -4,6 +4,7 @@ Dispatches to a platform-specific backend:
 
 * ``darwin`` → launchd user agent (``_service_launchd``)
 * ``linux``  → systemd user unit  (``_service_systemd``)
+* ``win32``  → Task Scheduler task (``_service_windows``)
 
 Other platforms aren't supported; the install/uninstall calls return a
 non-zero exit code with a helpful message instead.
@@ -27,12 +28,15 @@ def _backend() -> Any | None:
     if sys.platform.startswith("linux"):
         from . import _service_systemd
         return _service_systemd
+    if sys.platform == "win32":
+        from . import _service_windows
+        return _service_windows
     return None
 
 
 def _unsupported_platform_msg() -> str:
     return (
-        f"cc-buddy-bridge: service install is only supported on macOS and Linux "
+        f"cc-buddy-bridge: service install is only supported on macOS, Linux, and Windows "
         f"(got {sys.platform!r})."
     )
 
@@ -64,7 +68,7 @@ def is_loaded() -> bool:
 
 
 def backend_name() -> str | None:
-    """Human-readable backend identifier ("launchd", "systemd"), or None."""
+    """Human-readable backend identifier ("launchd", "systemd", "task-scheduler"), or None."""
     backend = _backend()
     return backend.NAME if backend is not None else None
 
@@ -78,7 +82,7 @@ def unit_path() -> Any | None:
 def log_path() -> Any | None:
     """Where to look for daemon logs.
 
-    Returns a ``Path`` on macOS (a real log file) and a string on Linux
+    Returns a ``Path`` on macOS/Windows (a real log file) and a string on Linux
     (the ``journalctl`` invocation, since journald is the log store).
     """
     backend = _backend()

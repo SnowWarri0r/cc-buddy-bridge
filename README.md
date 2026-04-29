@@ -53,6 +53,8 @@ python3.12 -m venv .venv
 .venv/bin/cc-buddy-bridge daemon
 ```
 
+**Windows users:** Replace `.venv/bin/` with `.venv\Scripts\` in the commands above.
+
 Then start any `claude` session. The daemon scans for a BLE device advertising
 a name starting with `Claude`, connects, and begins pushing state.
 
@@ -62,10 +64,14 @@ To remove the hooks:
 .venv/bin/cc-buddy-bridge uninstall
 ```
 
-### Auto-start on login (macOS)
+### Auto-start on login
 
 Instead of running `cc-buddy-bridge daemon` manually, install it as a
-user-level launchd agent so it starts at login and restarts on crashes:
+system service so it starts at login and restarts on crashes.
+
+#### macOS (launchd)
+
+Install as a user-level launchd agent:
 
 ```bash
 .venv/bin/cc-buddy-bridge install --service
@@ -82,9 +88,24 @@ To remove it:
 .venv/bin/cc-buddy-bridge uninstall --service
 ```
 
-`cc-buddy-bridge status` reports both hook and service status.
+#### Windows (Task Scheduler)
 
-### Auto-start on login (Linux)
+Install as a Task Scheduler task:
+
+```bash
+.venv/Scripts/cc-buddy-bridge install --service
+```
+
+This creates a task named `cc-buddy-bridge-daemon` that runs at logon.
+Logs are written to `%LOCALAPPDATA%\cc-buddy-bridge\daemon.log`.
+
+To remove it:
+
+```bash
+.venv/Scripts/cc-buddy-bridge uninstall --service
+```
+
+#### Linux (systemd)
 
 The same `--service` flag installs a user-level systemd unit on Linux:
 
@@ -124,6 +145,10 @@ Tested on Ubuntu 22.04 LTS. Should work on any distro with a systemd user
 manager (Fedora 39+, Debian 12+, Arch, etc.) — please open an issue if
 your distro needs a tweak.
 
+---
+
+`cc-buddy-bridge status` reports both hook and service status.
+
 ### Show the stick's state in Claude Code's status line
 
 `cc-buddy-bridge hud` prints a compact one-line summary (battery,
@@ -157,7 +182,7 @@ Sample output:
 
 ## Requirements
 
-* macOS 12+ / Linux with BlueZ (Windows untested)
+* macOS 12+ / Windows 10+ / Linux with BlueZ
 * Python 3.11+
 * A flashed claude-desktop-buddy device (M5StickC Plus)
 * Claude Code CLI

@@ -1,11 +1,10 @@
-"""Best-effort macOS-native notifications for assistant turn completion.
+"""Best-effort native notifications for assistant turn completion.
 
-Uses ``osascript`` so we get the same system notification banner Claude
-Code's other macOS-aware tools produce, plus the user's configured Notification
-Center sound. Fired fire-and-forget — never blocks the IPC handler.
+macOS: Uses osascript for notification banner + afplay for sound
+Windows: Uses PowerShell for toast notification + winsound for beep
+Linux: Silently no-ops
 
-Silently no-ops on non-macOS so tests / Linux contributors don't pay for
-this path.
+Fired fire-and-forget — never blocks the IPC handler.
 """
 
 from __future__ import annotations
@@ -14,24 +13,31 @@ import logging
 import platform
 import shlex
 import subprocess
+import sys
 
 log = logging.getLogger(__name__)
 
 
-SOUND_FILE = "/System/Library/Sounds/Glass.aiff"
+SOUND_FILE_MACOS = "/System/Library/Sounds/Glass.aiff"
 
 
 def notify_turn_complete(*, subtitle: str = "", session_id: str = "") -> None:
     """Pop a 'Claude finished' banner + play a sound.
 
-    Sound is played via ``afplay`` in a separate Popen instead of the
-    AppleScript ``sound name "Glass"`` parameter — that latter route
-    depends on Script Editor having Notification Center sound permission,
-    which is off by default on recent macOS versions and silently swallows
-    the audio. ``afplay`` doesn't go through Notification Center at all.
+    macOS: Uses osascript for banner + afplay for sound
+    Windows: Uses PowerShell toast notification + winsound beep
     """
-    if platform.system() != "Darwin":
+    system = platform.system()
+    if system == "Darwin":
+        _notify_macos(subtitle, session_id)
+    elif system == "Windows":
+        _notify_windows(subtitle, session_id)
+    else:
         return
+
+
+def _notify_macos(subtitle: str, session_id: str) -> None:
+    """macOS notification via osascript + afplay."""
     title = "cc-buddy-bridge"
     body = "Claude finished — tap to refocus"
     parts = [
@@ -51,7 +57,7 @@ def notify_turn_complete(*, subtitle: str = "", session_id: str = "") -> None:
         log.debug("notify banner failed: %s", e)
     try:
         subprocess.Popen(
-            ["afplay", SOUND_FILE],
+            ["afplay", SOUND_FILE_MACOS],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
@@ -60,7 +66,61 @@ def notify_turn_complete(*, subtitle: str = "", session_id: str = "") -> None:
     log.debug("notify_turn_complete fired (session=%s)", session_id)
 
 
+def _notify_windows(subtitle: str, session_id: str) -> None:
+    """Windows notification via PowerShell toast + winsound."""
+    title = "cc-buddy-bridge"
+    body = "Claude finished"
+    if subtitle:
+        body = f"{subtitle} — {body}"
+
+    # PowerShell toast notification
+    ps_script = f"""
+[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
+[Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] | Out-Null
+$template = @"
+<toast>
+    <visual>
+        <binding template="ToastText02">
+            <text id="1">{_escape_xml(title)}</text>
+            <text id="2">{_escape_xml(body)}</text>
+        </binding>
+    </visual>
+</toast>
+"@
+$xml = New-Object Windows.Data.Xml.Dom.XmlDocument
+$xml.LoadXml($template)
+$toast = New-Object Windows.UI.Notifications.ToastNotification $xml
+[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("cc-buddy-bridge").Show($toast)
+"""
+    try:
+        subprocess.Popen(
+            ["powershell", "-NoProfile", "-Command", ps_script],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except (FileNotFoundError, OSError) as e:
+        log.debug("notify toast failed: %s", e)
+
+    # Play system sound
+    try:
+        import winsound
+        winsound.MessageBeep(winsound.MB_OK)
+    except (ImportError, RuntimeError) as e:
+        log.debug("notify sound failed: %s", e)
+
+    log.debug("notify_turn_complete fired (session=%s)", session_id)
+
+
 def _q(text: str) -> str:
     """AppleScript single-line string literal — escape backslashes + quotes."""
     safe = text.replace("\\", "\\\\").replace('"', '\\"')
     return f'"{safe}"'
+
+
+def _escape_xml(text: str) -> str:
+    """Escape XML special characters for toast notification."""
+    return (text.replace("&", "&amp;")
+                .replace("<", "&lt;")
+                .replace(">", "&gt;")
+                .replace('"', "&quot;")
+                .replace("'", "&apos;"))
