@@ -191,33 +191,60 @@ def _run_unpair() -> int:
 def _socket_in_use(path: str) -> bool:
     """True iff a process is actively accepting on ``path``.
 
-    A Unix socket file left over from a crash returns ECONNREFUSED on connect;
-    we remove the stale file and return False so the new daemon can bind.
+    On Unix: checks Unix socket file
+    On Windows: reads port from file and checks TCP socket
     """
     if not os.path.exists(path):
         return False
-    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    s.settimeout(0.5)
-    try:
-        s.connect(path)
-    except (ConnectionRefusedError, FileNotFoundError):
-        # Stale socket file — clean up and proceed.
+
+    if sys.platform == "win32":
+        # Windows: path is a port file, read port and check TCP socket
         try:
-            os.unlink(path)
-        except OSError:
-            pass
-        return False
-    except OSError:
-        # Some other error (permissions, socket unreadable). Be conservative
-        # and treat as in-use so we don't clobber something.
-        return True
+            from pathlib import Path
+            port = int(Path(path).read_text().strip())
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(0.5)
+            try:
+                s.connect(("127.0.0.1", port))
+                return True
+            except (ConnectionRefusedError, OSError):
+                # Stale port file
+                try:
+                    os.unlink(path)
+                except OSError:
+                    pass
+                return False
+            finally:
+                try:
+                    s.close()
+                except OSError:
+                    pass
+        except (ValueError, OSError):
+            return False
     else:
-        return True
-    finally:
+        # Unix: check Unix socket
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.settimeout(0.5)
         try:
-            s.close()
+            s.connect(path)
+        except (ConnectionRefusedError, FileNotFoundError):
+            # Stale socket file — clean up and proceed.
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+            return False
         except OSError:
-            pass
+            # Some other error (permissions, socket unreadable). Be conservative
+            # and treat as in-use so we don't clobber something.
+            return True
+        else:
+            return True
+        finally:
+            try:
+                s.close()
+            except OSError:
+                pass
 
 
 if __name__ == "__main__":
