@@ -183,18 +183,18 @@ def show_status() -> int:
         if not any_installed:
             print("  no cc-buddy-bridge hooks installed")
 
-    print("\nService (macOS launchd):")
-    try:
-        from . import service
-    except ImportError:
-        print("  (service module unavailable)")
-        return 0
-    if not service.is_installed():
+    from . import service
+    backend = service.backend_name()
+    header = f"Service ({backend}):" if backend else "Service:"
+    print(f"\n{header}")
+    if backend is None:
+        print(f"  unsupported platform ({sys.platform})")
+    elif not service.is_installed():
         print("  not installed (run `cc-buddy-bridge install --service` to add)")
     else:
         loaded = "loaded" if service.is_loaded() else "installed but not loaded"
-        print(f"  {loaded}: {service.PLIST_PATH}")
-        print(f"  logs: {service.LOG_PATH}")
+        print(f"  {loaded}: {service.unit_path()}")
+        print(f"  logs: {service.log_path()}")
     return 0
 
 

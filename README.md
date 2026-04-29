@@ -84,9 +84,45 @@ To remove it:
 
 `cc-buddy-bridge status` reports both hook and service status.
 
-Linux (systemd user unit) is tracked in
-[issue #4](https://github.com/SnowWarri0r/cc-buddy-bridge/issues/4); help
-wanted.
+### Auto-start on login (Linux)
+
+The same `--service` flag installs a user-level systemd unit on Linux:
+
+```bash
+.venv/bin/cc-buddy-bridge install --service
+```
+
+This writes `~/.config/systemd/user/cc-buddy-bridge.service` pointed at the
+venv Python you just installed from, then runs `systemctl --user
+daemon-reload` and `systemctl --user enable --now cc-buddy-bridge.service`
+so the daemon starts immediately and on every login. View logs with:
+
+```bash
+journalctl --user -u cc-buddy-bridge.service -f
+```
+
+To remove it:
+
+```bash
+.venv/bin/cc-buddy-bridge uninstall --service
+```
+
+A few Linux-specific gotchas:
+
+* **BLE needs BlueZ.** Make sure the `bluetooth` service is running
+  (`systemctl status bluetooth`) and your user is in the `bluetooth`
+  group (`sudo usermod -aG bluetooth $USER`, then log out and back in).
+  Without that, you'll see
+  `org.freedesktop.DBus.Error.ServiceUnknown ... org.bluez` in the
+  journal.
+* **Survive logout / start at boot.** The user manager exits with your
+  last session by default, which stops the daemon. Run
+  `loginctl enable-linger $USER` once if you want the unit to start at
+  boot and persist after logout.
+
+Tested on Ubuntu 22.04 LTS. Should work on any distro with a systemd user
+manager (Fedora 39+, Debian 12+, Arch, etc.) — please open an issue if
+your distro needs a tweak.
 
 ### Show the stick's state in Claude Code's status line
 

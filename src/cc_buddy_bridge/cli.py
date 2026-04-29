@@ -29,12 +29,13 @@ def main(argv: list[str] | None = None) -> int:
     p_install = sub.add_parser("install", help="Register hooks in ~/.claude/settings.json")
     p_install.add_argument(
         "--service", action="store_true",
-        help="Install as a macOS launchd agent (daemon auto-starts on login) instead of registering hooks",
+        help="Install a user-level service so the daemon auto-starts on login "
+             "(macOS: launchd agent; Linux: systemd user unit) instead of registering hooks",
     )
     p_uninstall = sub.add_parser("uninstall", help="Remove cc-buddy-bridge hooks from ~/.claude/settings.json")
     p_uninstall.add_argument(
         "--service", action="store_true",
-        help="Remove the macOS launchd agent instead of removing hooks",
+        help="Remove the user-level service (launchd agent / systemd unit) instead of removing hooks",
     )
     sub.add_parser("status", help="Show install status")
 
