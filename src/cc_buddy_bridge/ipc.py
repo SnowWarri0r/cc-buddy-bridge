@@ -1,4 +1,4 @@
-"""IPC between hook scripts and the daemon.
+r"""IPC between hook scripts and the daemon.
 
 Protocol: line-delimited JSON, one request → one response, then close.
 
