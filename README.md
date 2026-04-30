@@ -304,7 +304,7 @@ Daily-driver complete. The author runs it on every Claude Code session.
 
 * Smart matcher — auto-allow trivial Bash (`ls`/`cat`/`grep`/...), always-ask risky (`rm`/`curl`/`git push`/...), defer the rest
 * Live assistant text — JSONL tailer fires entry-emit within ~500 ms of the message hitting disk; no Stop-hook lag
-* Turn-end notification — macOS Notification Center banner + Glass sound + stick `celebrate` animation, fires the moment a turn finishes
+* Turn-end celebration — stick `celebrate` animation fires the moment a turn finishes (the buddy itself is the notification — no OS-level banner, intentionally)
 * Status-line `hud` subcommand — emoji bar with battery progress, encryption, pending prompts; composes alongside claude-hud
 
 **Operations**

@@ -212,10 +212,6 @@ class Daemon:
             self.state.pulse_completed(duration_secs=CELEBRATE_SECS)
             await self._push_heartbeat(force=True)
             asyncio.create_task(self._heartbeat_after(CELEBRATE_SECS + 0.1))
-            # macOS-side banner + sound for when the user has tabbed away.
-            from .notifier import notify_turn_complete
-            subtitle = self.state.entries[0].text[:80] if self.state.entries else ""
-            notify_turn_complete(subtitle=subtitle, session_id=session_id)
             return {"ok": True}
 
         if evt == "pretooluse":
