@@ -309,14 +309,13 @@ Daily-driver complete. The author runs it on every Claude Code session.
 
 **Operations**
 
-* macOS launchd service — auto-start on login, restart on crash
+* Auto-start service on macOS (launchd) / Linux (systemd user unit) / Windows (Task Scheduler) — `cc-buddy-bridge install --service` picks the right backend
 * Stick status polling — battery %, link encryption, fs free
 * Exponential reconnect backoff + multi-daemon guard + resilient logging
 
 **Backlog**
 
-* Linux systemd user unit — see [issue #4](https://github.com/SnowWarri0r/cc-buddy-bridge/issues/4); help wanted
-* Anything else — open an issue
+* Open an issue — any rough edge, a quirk you hit, a feature you want, a platform that misbehaves
 
 ## License
 
