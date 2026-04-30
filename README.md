@@ -180,7 +180,11 @@ another statusline plugin? You can compose both — wrap them in a small
 shell script and concatenate outputs; statusLine accepts multi-line
 responses.
 
-Sample output:
+Live in iTerm2 — paw print, battery progress bar, encryption lock, running session count:
+
+<p align="center"><img src="docs/img/statusline.png" alt="cc-buddy-bridge hud — paw, full green battery bar, 100%, lock, 1run" width="436"></p>
+
+Other states the same line goes through:
 
 ```
 🐾 🔋 96% 🔒              # healthy, encrypted link
