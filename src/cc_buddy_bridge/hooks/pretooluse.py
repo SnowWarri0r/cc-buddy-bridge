@@ -5,7 +5,8 @@ Claude Code's normal approval flow runs.
 
 stdin: { session_id, tool_name, tool_input, tool_use_id, ... }
 stdout (on decision): { "hookSpecificOutput": { "hookEventName": "PreToolUse",
-                                                 "permissionDecision": "allow"|"deny"|"ask" } }
+                                                 "permissionDecision": "allow"|"deny"|"ask",
+                                                 "permissionDecisionReason": "..." } }
 """
 
 from __future__ import annotations
@@ -54,14 +55,35 @@ def main() -> int:
     decision = resp.get("decision")
     if decision not in ("allow", "deny", "ask"):
         return 0
+    # Always surface a permissionDecisionReason so the model knows the
+    # decision came from a human at the Hardware Buddy device. Without
+    # this, Claude Code treats a bare `permissionDecision: "deny"` as a
+    # generic hook block and may attempt alternative phrasings to work
+    # around it (e.g. dropping `-rf`, splitting an `rm -rf foo/` into
+    # per-file `rm`s). A clear reason short-circuits that.
+    reason = _decision_reason(decision)
     out = {
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
             "permissionDecision": decision,
+            "permissionDecisionReason": reason,
         }
     }
     sys.stdout.write(json.dumps(out) + "\n")
     return 0
+
+
+def _decision_reason(decision: str) -> str:
+    """Human-readable reason surfaced to the model alongside the decision."""
+    if decision == "allow":
+        return "User approved on Hardware Buddy device."
+    if decision == "deny":
+        return (
+            "User denied on Hardware Buddy device. "
+            "Do not retry with alternative phrasings; the human has rejected this action."
+        )
+    # "ask" — daemon explicitly bounced this to Claude Code's normal flow.
+    return "Hardware Buddy deferred to Claude Code's normal approval flow."
 
 
 if __name__ == "__main__":
