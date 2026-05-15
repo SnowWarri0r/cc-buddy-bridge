@@ -257,6 +257,8 @@ class Daemon:
                     "waiting": self.state.waiting_count,
                     "tokens_cumulative": self.state.tokens_cumulative,
                     "tokens_today": self.state.tokens_today,
+                    "cost_cumulative": self.state.cost_cumulative,
+                    "cost_today": self.state.cost_today,
                     "pending_tool": pending.tool_name if pending else None,
                     "last_entry": self.state.entries[0].text if self.state.entries else "",
                 },
@@ -421,8 +423,15 @@ class Daemon:
 
     # ---- JSONL callback ----
 
-    async def _on_tokens(self, cumulative: int, today: int, _entries: list) -> None:
-        self.state.set_tokens(cumulative, today)
+    async def _on_tokens(
+        self,
+        cumulative: int,
+        today: int,
+        cost_cumulative: float,
+        cost_today: float,
+        _entries: list,
+    ) -> None:
+        self.state.set_tokens(cumulative, today, cost_cumulative, cost_today)
         await self._push_heartbeat()
 
     async def _on_assistant_text(self, _transcript_path: str, text: str, _uuid: str) -> None:

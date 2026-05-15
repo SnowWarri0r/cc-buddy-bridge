@@ -89,3 +89,23 @@ def test_format_no_running_omits_count():
     state = {"ble_connected": True, "sec": True, "battery_pct": 80, "running": 0}
     out = format_line(state)
     assert "run" not in out
+
+
+def test_format_cost_shows_when_above_one_cent():
+    state = {"ble_connected": True, "sec": True, "battery_pct": 80, "cost_today": 0.42}
+    out = format_line(state)
+    assert "$0.42" in out
+    ascii_out = format_line(state, ascii_only=True)
+    assert "$0.42" in ascii_out
+
+
+def test_format_cost_hidden_below_one_cent():
+    state = {"ble_connected": True, "sec": True, "battery_pct": 80, "cost_today": 0.004}
+    out = format_line(state)
+    assert "$" not in out
+
+
+def test_format_cost_two_decimals_for_double_digits():
+    state = {"ble_connected": True, "sec": True, "battery_pct": 80, "cost_today": 12.5}
+    out = format_line(state)
+    assert "$12.50" in out

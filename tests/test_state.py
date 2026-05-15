@@ -58,6 +58,16 @@ def test_tokens_setter():
     s.set_tokens(123, 45)
     assert s.tokens_cumulative == 123
     assert s.tokens_today == 45
+    # Cost params default to 0 when omitted
+    assert s.cost_cumulative == 0.0
+    assert s.cost_today == 0.0
+
+
+def test_tokens_setter_with_cost():
+    s = State()
+    s.set_tokens(1000, 200, cost_cumulative=12.34, cost_today=2.50)
+    assert s.cost_cumulative == 12.34
+    assert s.cost_today == 2.50
 
 
 def test_first_pending_picks_oldest():

@@ -46,6 +46,10 @@ class State:
         self.tokens_cumulative: int = 0
         self.tokens_today: int = 0
         self.tokens_day_key: str = _today_key()
+        # USD cost estimates derived from the same usage records that feed
+        # tokens_*. See pricing.py. Displayed in the statusline.
+        self.cost_cumulative: float = 0.0
+        self.cost_today: float = 0.0
         # Monotonic timestamp until which heartbeats should carry
         # ``completed: true`` — the firmware's celebrate-animation trigger.
         # Pulsed by turn_end, observed by build_heartbeat.
@@ -145,13 +149,21 @@ class State:
 
     # ---- tokens ----
 
-    def set_tokens(self, cumulative: int, today: int) -> None:
+    def set_tokens(
+        self,
+        cumulative: int,
+        today: int,
+        cost_cumulative: float = 0.0,
+        cost_today: float = 0.0,
+    ) -> None:
         """Called by the JSONL tailer after recomputing from transcript files."""
         day = _today_key()
         if day != self.tokens_day_key:
             self.tokens_day_key = day
         self.tokens_cumulative = cumulative
         self.tokens_today = today
+        self.cost_cumulative = cost_cumulative
+        self.cost_today = cost_today
 
     # ---- aggregates ----
 

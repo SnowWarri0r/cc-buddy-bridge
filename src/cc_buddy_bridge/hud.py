@@ -136,6 +136,13 @@ def format_line(state: Optional[dict[str, Any]], *, ascii_only: bool = False) ->
         parts.append("UNSEC" if ascii_only else "⚠UNSEC")
     # sec=None (no status ack yet) → omit
 
+    # Today's estimated API cost — appears once it crosses ~1¢ so the line
+    # stays clean during idle sessions. Two decimals to fit `$NN.NN` (5 chars
+    # at typical daily usage). Pricing source: cc_buddy_bridge.pricing.
+    cost_today = state.get("cost_today")
+    if isinstance(cost_today, (int, float)) and cost_today >= 0.01:
+        parts.append(f"${cost_today:.2f}")
+
     # Session activity (only if > 0)
     running = state.get("running") or 0
     if running:

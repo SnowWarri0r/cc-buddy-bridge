@@ -21,12 +21,15 @@ from typing import Any, Awaitable, Callable, Optional  # Optional used below
 
 from watchfiles import Change, awatch
 
+from . import pricing
+
 log = logging.getLogger(__name__)
 
 TRANSCRIPT_ROOT = Path.home() / ".claude" / "projects"
 
-# Callback: async (tokens_cumulative, tokens_today, new_entries: list[tuple[float,str]]) -> None
-TokensCallback = Callable[[int, int, list[tuple[float, str]]], Awaitable[None]]
+# Callback: async (tokens_cumulative, tokens_today, cost_cumulative, cost_today, entries) -> None.
+# Cost values are USD estimates; see pricing.py.
+TokensCallback = Callable[[int, int, float, float, list[tuple[float, str]]], Awaitable[None]]
 
 # Callback fired the moment a new assistant record with text content is parsed.
 # Async (transcript_path, text, uuid) -> None. Skipped for tool_use-only turns.
@@ -52,6 +55,10 @@ class JSONLTailer:
         # day_key → sum of tokens_today across files (day_key is YYYY-MM-DD local)
         self._day_key = _today_key()
         self._today_tokens_per_file: dict[str, int] = {}
+        # Mirror of the tokens dicts in USD. Estimated via pricing.estimate_cost
+        # at parse time, so changing pricing.py rates only affects new records.
+        self._cost_per_file: dict[str, float] = {}
+        self._today_cost_per_file: dict[str, float] = {}
         # file path → last parsed assistant content array. Used by the daemon to
         # emit a `turn` event over BLE when the Stop hook fires.
         self._last_assistant_content: dict[str, list] = {}
@@ -140,6 +147,8 @@ class JSONLTailer:
                 self._offsets.pop(path_str, None)
                 self._tokens_per_file.pop(path_str, None)
                 self._today_tokens_per_file.pop(path_str, None)
+                self._cost_per_file.pop(path_str, None)
+                self._today_cost_per_file.pop(path_str, None)
                 continue
             try:
                 self._process_file(path_str)
@@ -158,6 +167,8 @@ class JSONLTailer:
             start = 0
             self._tokens_per_file.pop(path, None)
             self._today_tokens_per_file.pop(path, None)
+            self._cost_per_file.pop(path, None)
+            self._today_cost_per_file.pop(path, None)
         if start == size:
             return
         with open(path, "rb") as f:
@@ -175,6 +186,7 @@ class JSONLTailer:
             # Day rolled over — reset today-only counters.
             self._day_key = current_day
             self._today_tokens_per_file.clear()
+            self._today_cost_per_file.clear()
 
         for raw in consumed.splitlines():
             if not raw.strip():
@@ -225,19 +237,24 @@ class JSONLTailer:
         out = int(usage.get("output_tokens") or 0)
         if not out:
             return
+        cost = pricing.estimate_cost(msg.get("model") or "", usage)
         self._tokens_per_file[path] = self._tokens_per_file.get(path, 0) + out
+        self._cost_per_file[path] = self._cost_per_file.get(path, 0.0) + cost
         # Only attribute to today's counter if the record's own timestamp falls
         # within the current local day. Records without a timestamp contribute
         # to cumulative only.
         if _record_is_today(obj.get("timestamp"), current_day):
             self._today_tokens_per_file[path] = self._today_tokens_per_file.get(path, 0) + out
+            self._today_cost_per_file[path] = self._today_cost_per_file.get(path, 0.0) + cost
 
     async def _emit(self) -> None:
         cumulative = sum(self._tokens_per_file.values())
         today = sum(self._today_tokens_per_file.values())
+        cost_cumulative = sum(self._cost_per_file.values())
+        cost_today = sum(self._today_cost_per_file.values())
         # Entries aren't implemented via tailer yet — hook events feed them directly.
         # Keeping the signature for future expansion.
-        await self.on_update(cumulative, today, [])
+        await self.on_update(cumulative, today, cost_cumulative, cost_today, [])
 
     def last_assistant_content(self, transcript_path: str) -> list | None:
         """Return the most recently parsed assistant content array for a transcript,
