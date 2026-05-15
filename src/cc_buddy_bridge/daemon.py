@@ -158,6 +158,11 @@ class Daemon:
 
     async def _handle_ipc(self, req: dict[str, Any]) -> dict[str, Any]:
         evt = req.get("evt")
+        # Drop pretooluse from the trace: it has its own dedicated INFO log,
+        # and the volume would drown out everything else. get_state is the
+        # hud polling — also too chatty to be useful here.
+        if evt not in ("pretooluse", "get_state"):
+            log.info("ipc evt=%r session=%s", evt, (req.get("session_id") or "?")[:8])
         if evt == "session_start":
             self.state.session_start(
                 req["session_id"],
