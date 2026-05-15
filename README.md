@@ -449,6 +449,63 @@ Daily-driver complete — the author runs it on every Claude Code session.
 
 * Open an issue — any rough edge, a quirk you hit, a feature you want, a platform that misbehaves
 
+## Contributing
+
+PRs, bug reports, and "I tried it on $WEIRD_LINUX_DISTRO and it broke" stories
+all welcome. For anything larger than a small bug fix, open an issue first so
+we can talk through the design.
+
+### Dev setup
+
+```bash
+git clone https://github.com/SnowWarri0r/cc-buddy-bridge
+cd cc-buddy-bridge
+python3.12 -m venv .venv
+.venv/bin/pip install -e '.[dev]'
+```
+
+The `[dev]` extra pulls in `pytest` + `ruff` (the only dev deps).
+
+### Test & lint
+
+```bash
+.venv/bin/pytest -q                  # ~140 tests, finishes in <1s
+.venv/bin/ruff check src/ tests/     # lint (CI runs this on every PR)
+```
+
+CI runs the test suite across **macOS / Linux / Windows × Python 3.11 / 3.12 / 3.13**.
+A PR turns green only when every cell is happy — if you touch anything
+filesystem-y or path-y, expect Windows to surface the quirks first (NTFS
+ignores POSIX mode bits, backslash vs forward-slash, etc).
+
+### Before touching the wire protocol
+
+The stick firmware has [7 documented sharp edges](#firmware-quirks-we-hit-and-how-we-work-around-them).
+Scan that section before chasing weird BLE behaviour through `bleak`. Most
+"the link keeps flapping" issues turn out to be quirk #1 (non-ASCII bytes
+crash the BLE stack) or quirk #5 (clock mode racing the HUD).
+
+### Commit messages
+
+Short subject line, lowercase, ≤ 70 chars; then a paragraph explaining **why**.
+Browse `git log --oneline` for the register. Don't paste emoji — the
+sanitizer would strip them from the stick anyway.
+
+### Translations
+
+The README mirrors across [English](README.md), [简体中文](README.zh-CN.md),
+and [日本語](README.ja.md). If you touch user-facing prose, please mirror
+across all three when you can; otherwise note in the PR that the other two
+need a translation pass — happy to take that as a follow-up.
+
+### Firmware patches
+
+The buddy firmware lives at [anthropics/claude-desktop-buddy](https://github.com/anthropics/claude-desktop-buddy).
+Changes there need a flashed M5StickC Plus to verify — bridge-side mocks
+won't catch wire-protocol misalignments. Be explicit in the PR description
+about what you've tested vs. what's still theory; reviewers can't tell from
+the diff alone.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).
