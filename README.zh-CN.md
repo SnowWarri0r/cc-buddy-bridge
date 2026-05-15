@@ -311,15 +311,20 @@ jq -r 'select(.source=="auto_allow") | .hint' ~/Library/Logs/cc-buddy-bridge-aud
 参考固件有几处线协议没说明的尖角。在这里记一笔，省得你重新 debug 一遍，
 也让代码里那些绕过逻辑的存在理由可见。
 
-### 1. 非 ASCII 字节会让 BLE 栈崩
+### 1. 非 ASCII 字节会破坏默认字体的渲染
 
-5×7 的 Adafruit GFX 位图字体表只覆盖 ASCII；任何 `0x80`–`0xFF`
-范围的字节（也就是所有 UTF-8 续位字节和 emoji 起始字节）会越过字体表索引，
-在足够多的代码路径里都能在心跳写入后 ~1 秒内把 radio 任务硬重置。
+固件用的是 TFT_eSPI 的默认 5×7 GFX 位图字体，仅 ASCII。`0x80`–`0xFF`
+范围的字节（所有 UTF-8 续位字节和 emoji 起始字节）会越过字体表索引；
+实测在足够多的代码路径里会在心跳写入后 ~1 秒内把 radio 任务硬重置。
 
-**绕过：** `protocol.py` 里的 `sanitize_for_stick()` 在发送前把 `0x20`–`0x7E`
-（外加 tab）以外的字节全部改写成 `?`。CJK 用户在 stick 上会看到一排排
-`?`——有损但稳定。
+**有一条没人打开的隐藏 CJK 通道**：`M5StickCPlus` 库内置了一份 1.7 MB
+的 HZK16 GB2312 字体，配套 API 是 `M5Display::loadHzk16(InternalHzk16)`。
+启用之后可以渲染简体中文（~7000 个 GB2312 字符，16×16 像素；只覆盖简体，
+不含繁体、日文假名、韩文谚文）。但官方固件从未调过这个函数；而且 bridge
+需要把 UTF-8 转成 GBK 再发送，才能让字节对落到 GB2312 查找表里。
+
+**绕过：** `protocol.py` 里的 `sanitize_for_stick()` 在发送前把
+`0x20`–`0x7E`（外加 tab）以外的字节全部改写成 `?`。有损但稳定。
 
 ### 2. `entries` 在线上的顺序是从旧到新，不是从新到旧
 
