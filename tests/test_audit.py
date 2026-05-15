@@ -79,24 +79,27 @@ def test_record_creates_parent_dir(tmp_path):
 
 
 def test_record_swallows_io_errors(tmp_path):
-    """Daemon must never crash on audit IO failure."""
-    path = tmp_path / "audit.jsonl"
-    path.parent.chmod(0o500)  # remove write perm
-    log = AuditLog(path=path)
-    try:
-        # Should not raise.
-        log.record(
-            session_id="x", tool_name="Bash", hint="ls",
-            matcher="allow", decision="allow", source="auto_allow",
-        )
-        log.record(
-            session_id="x", tool_name="Bash", hint="ls",
-            matcher="allow", decision="allow", source="auto_allow",
-        )
-        # Sticky "failure logged" flag suppresses repeated warnings.
-        assert log._failure_logged
-    finally:
-        path.parent.chmod(0o700)  # restore so pytest cleanup works
+    """Daemon must never crash on audit IO failure.
+
+    Force the error portably by pointing the audit path AT an existing directory
+    — ``open(dir, "a")`` raises ``IsADirectoryError`` on POSIX and ``PermissionError``
+    on Windows, both ``OSError`` subclasses. POSIX chmod-based simulation doesn't
+    work on Windows (mode bits ignored).
+    """
+    dir_as_path = tmp_path / "audit_target"
+    dir_as_path.mkdir()
+    log = AuditLog(path=dir_as_path)
+    # Should not raise even though writing is impossible.
+    log.record(
+        session_id="x", tool_name="Bash", hint="ls",
+        matcher="allow", decision="allow", source="auto_allow",
+    )
+    log.record(
+        session_id="x", tool_name="Bash", hint="ls",
+        matcher="allow", decision="allow", source="auto_allow",
+    )
+    # Sticky "failure logged" flag suppresses repeated warnings.
+    assert log._failure_logged
 
 
 def test_record_decision_can_be_none(tmp_path):
