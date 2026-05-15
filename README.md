@@ -277,7 +277,38 @@ One line per decision; fields:
 | `source`   | `auto_allow` / `stick` / `timeout` / `defer` / `ble_disconnected`|
 | `elapsed_s`| Round-trip seconds (only present when the stick was involved)    |
 
-Quick recipes:
+### Viewing
+
+`cc-buddy-bridge audit` is the friendly viewer — coloured, aligned, with
+tail / filter / follow:
+
+```bash
+cc-buddy-bridge audit                       # last 20 entries
+cc-buddy-bridge audit -n 100                # last 100
+cc-buddy-bridge audit -f                    # follow new entries (Ctrl+C to stop)
+cc-buddy-bridge audit --decision deny       # only the things you blocked
+cc-buddy-bridge audit --source stick        # only stick-decided rounds
+cc-buddy-bridge audit --tool Edit -n 50     # last 50 Edit calls
+cc-buddy-bridge audit --path                # print the file path and exit
+cc-buddy-bridge audit --ascii               # no colour (pipes / dumb terminals)
+```
+
+Sample output:
+
+```
+# audit log: /Users/snow/Library/Logs/cc-buddy-bridge-audit.jsonl
+00:21:09.029 Bash     —     defer       sleep 8 && gh run list --repo ...
+00:30:10.212 Bash     allow auto_allow  cat >> tests/test_audit.py <<'EOF' ...
+00:34:55.871 Bash     deny  stick       git push origin main --force
+```
+
+Colours: green for `allow`, red for `deny`, dim for `—` (no decision /
+deferred). Source column is yellow for `stick` (a human pressed a button),
+red for `timeout`, dim otherwise.
+
+### Raw jq recipes
+
+If you prefer jq:
 
 ```bash
 # "What did I deny on the stick today?"

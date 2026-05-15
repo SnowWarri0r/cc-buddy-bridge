@@ -2,10 +2,17 @@
 
 from __future__ import annotations
 
+import io
 import json
 from pathlib import Path
 
-from cc_buddy_bridge.audit import AuditLog, default_path
+from cc_buddy_bridge.audit import (
+    AuditLog,
+    default_path,
+    format_entry,
+    iter_entries,
+    render,
+)
 
 
 def test_default_path_returns_path():
@@ -113,3 +120,108 @@ def test_record_decision_can_be_none(tmp_path):
     entry = json.loads(path.read_text(encoding="utf-8"))
     assert entry["decision"] is None
     assert entry["source"] == "defer"
+
+
+# ---- viewer ----
+
+def _seed(path: Path, entries: list[dict]) -> None:
+    path.write_text("\n".join(json.dumps(e) for e in entries) + "\n", encoding="utf-8")
+
+
+def test_iter_entries_yields_in_order_and_filters(tmp_path):
+    p = tmp_path / "audit.jsonl"
+    _seed(p, [
+        {"ts": "2026-05-16T00:01:02.000+08:00", "tool": "Bash", "decision": "allow", "source": "auto_allow", "hint": "ls"},
+        {"ts": "2026-05-16T00:02:03.000+08:00", "tool": "Bash", "decision": "deny",  "source": "stick",      "hint": "rm -rf /"},
+        {"ts": "2026-05-16T00:03:04.000+08:00", "tool": "Edit", "decision": "allow", "source": "stick",      "hint": "file.txt"},
+    ])
+    all_e = list(iter_entries(p))
+    assert [e["tool"] for e in all_e] == ["Bash", "Bash", "Edit"]
+
+    denied = list(iter_entries(p, decision="deny"))
+    assert len(denied) == 1 and denied[0]["hint"] == "rm -rf /"
+
+    via_stick = list(iter_entries(p, source="stick"))
+    assert len(via_stick) == 2
+
+    edits = list(iter_entries(p, tool="Edit"))
+    assert len(edits) == 1
+
+
+def test_iter_entries_skips_corrupt_lines(tmp_path):
+    p = tmp_path / "audit.jsonl"
+    p.write_text(
+        '{"ts":"2026-05-16T00:00:00.000+08:00","tool":"Bash","decision":"allow","source":"auto_allow","hint":"ls"}\n'
+        'not json at all\n'
+        '{"ts":"2026-05-16T00:00:01.000+08:00","tool":"Bash","decision":"deny","source":"stick","hint":"rm"}\n',
+        encoding="utf-8",
+    )
+    entries = list(iter_entries(p))
+    assert len(entries) == 2
+
+
+def test_iter_entries_missing_file_yields_nothing(tmp_path):
+    assert list(iter_entries(tmp_path / "no-such.jsonl")) == []
+
+
+def test_format_entry_truncates_long_hint():
+    entry = {
+        "ts": "2026-05-16T00:00:00.123+08:00",
+        "tool": "Bash",
+        "decision": "allow",
+        "source": "auto_allow",
+        "hint": "a" * 500,
+    }
+    line = format_entry(entry, ascii_only=True, width=80)
+    assert len(line) <= 80
+    assert line.endswith("…")
+
+
+def test_format_entry_shows_time_tool_decision_hint():
+    entry = {
+        "ts": "2026-05-16T01:23:45.678+08:00",
+        "tool": "Bash",
+        "decision": "deny",
+        "source": "stick",
+        "hint": "git push origin main --force",
+    }
+    line = format_entry(entry, ascii_only=True, width=120)
+    assert "01:23:45.678" in line
+    assert "Bash" in line
+    assert "deny" in line
+    assert "stick" in line
+    assert "git push origin main --force" in line
+
+
+def test_format_entry_ascii_omits_ansi():
+    entry = {"ts": "2026-05-16T00:00:00.000+08:00", "tool": "Bash", "decision": "allow", "source": "auto_allow", "hint": "ls"}
+    line = format_entry(entry, ascii_only=True)
+    assert "\033[" not in line
+
+
+def test_format_entry_color_emits_ansi():
+    entry = {"ts": "2026-05-16T00:00:00.000+08:00", "tool": "Bash", "decision": "deny", "source": "stick", "hint": "rm"}
+    line = format_entry(entry, ascii_only=False)
+    assert "\033[31m" in line  # red for deny
+
+
+def test_render_prints_header_and_last_n_entries(tmp_path):
+    p = tmp_path / "audit.jsonl"
+    _seed(p, [
+        {"ts": f"2026-05-16T00:00:{i:02d}.000+08:00", "tool": "Bash", "decision": "allow", "source": "auto_allow", "hint": f"cmd-{i}"}
+        for i in range(10)
+    ])
+    buf = io.StringIO()
+    render(path=p, last=3, ascii_only=True, out=buf)
+    text = buf.getvalue()
+    assert "# audit log:" in text
+    assert "cmd-9" in text
+    assert "cmd-8" in text
+    assert "cmd-7" in text
+    assert "cmd-6" not in text  # outside last 3
+
+
+def test_render_missing_file_says_empty(tmp_path):
+    buf = io.StringIO()
+    render(path=tmp_path / "no-such.jsonl", last=20, ascii_only=True, out=buf)
+    assert "(empty" in buf.getvalue()

@@ -248,7 +248,35 @@ INFO cc_buddy_bridge.daemon: settings.json: permissions.defaultMode='auto' ask=0
 | `source`    | `auto_allow` / `stick` / `timeout` / `defer` / `ble_disconnected`           |
 | `elapsed_s` | 与 stick 往返耗时（秒），仅在 stick 参与时存在                                |
 
-常用查询：
+### 查看
+
+`cc-buddy-bridge audit` 是友好的查看器——彩色、对齐，自带 tail / filter / follow：
+
+```bash
+cc-buddy-bridge audit                       # 最近 20 条
+cc-buddy-bridge audit -n 100                # 最近 100 条
+cc-buddy-bridge audit -f                    # 持续追踪新条目（Ctrl+C 退出）
+cc-buddy-bridge audit --decision deny       # 只看你拒掉的
+cc-buddy-bridge audit --source stick        # 只看 stick 按键决策的
+cc-buddy-bridge audit --tool Edit -n 50     # 最近 50 次 Edit 工具调用
+cc-buddy-bridge audit --path                # 打印审计文件路径并退出
+cc-buddy-bridge audit --ascii               # 不带颜色（管道 / 哑终端友好）
+```
+
+示例输出：
+
+```
+# audit log: /Users/snow/Library/Logs/cc-buddy-bridge-audit.jsonl
+00:21:09.029 Bash     —     defer       sleep 8 && gh run list --repo ...
+00:30:10.212 Bash     allow auto_allow  cat >> tests/test_audit.py <<'EOF' ...
+00:34:55.871 Bash     deny  stick       git push origin main --force
+```
+
+颜色：`allow` 绿、`deny` 红、`—`（未表态/转交）暗灰。source 列里 `stick`（你按了按键）黄、`timeout` 红，其余暗灰。
+
+### 原生 jq 配方
+
+不想用子命令、直接 jq 也行：
 
 ```bash
 # 今天我在 stick 上拒了哪些
