@@ -400,6 +400,46 @@ transcript 文件，新助手记录一落盘（通常 <500 ms）就触发 `on_as
 
 * 开 issue——任何粗糙边缘、踩到的坑、想要的功能、行为异常的平台
 
+## 贡献
+
+PR、bug 报告、"我在 $某怪发行版 上跑炸了" 故事都欢迎。比小修复大的改动，先开一个 issue 讨论一下设计再动手。
+
+### 开发环境
+
+```bash
+git clone https://github.com/SnowWarri0r/cc-buddy-bridge
+cd cc-buddy-bridge
+python3.12 -m venv .venv
+.venv/bin/pip install -e '.[dev]'
+```
+
+`[dev]` extra 拉 `pytest` + `ruff`（仅有的开发依赖）。
+
+### 测试与 lint
+
+```bash
+.venv/bin/pytest -q                  # ~140 个测试，<1s 跑完
+.venv/bin/ruff check src/ tests/     # lint（PR CI 必跑）
+```
+
+CI 跨 **macOS / Linux / Windows × Python 3.11 / 3.12 / 3.13** 跑测试。PR 全绿才能合——动到文件系统/路径相关的代码，Windows 通常第一个翻车（NTFS 忽略 POSIX mode bits、反斜杠 vs 正斜杠等）。
+
+### 动线协议之前
+
+固件那边有 [7 个有记录的尖角](#我们踩过的固件坑以及绕过办法)。怀疑 BLE 行为诡异时先扫一眼那一节再翻 `bleak`——多数"链路一直 flap"问题最后查出来是坑 #1（非 ASCII 字节让 BLE 栈崩）或坑 #5（时钟模式抢 HUD）。
+
+### 提交信息
+
+主题行短、小写、≤ 70 字符；之后一段说明"为什么"。`git log --oneline` 翻翻就能感受到风格。别贴 emoji——sanitizer 反正会从 stick 上剥掉。
+
+### 翻译
+
+README 三语版本互为镜像：[English](README.md) / [简体中文](README.zh-CN.md) / [日本語](README.ja.md)。改动用户可见的散文时，尽量三个一起同步；做不到也行，在 PR 描述里标注"另两个还需要翻译"，可以作为 follow-up。
+
+### 固件 PR
+
+buddy 固件在 [anthropics/claude-desktop-buddy](https://github.com/anthropics/claude-desktop-buddy)。那边的改动需要烧到 M5StickC Plus 上验证——bridge 侧的 mock 抓不到线协议错配。PR 描述里明确写清"实测过的"和"还在推理的"——光看 diff 评审者分不清楚。
+
 ## 许可证
 
 MIT。详见 [LICENSE](LICENSE)。

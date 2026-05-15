@@ -422,6 +422,60 @@ macOS 側はユーザーが手動で **システム設定 → Bluetooth → Clau
 
 * issue を立ててください —— 引っかかった粗い角、踏んだ罠、欲しい機能、挙動が変なプラットフォーム、なんでも
 
+## コントリビュート
+
+PR、バグ報告、「$ヘンな Linux ディストロで動かなかった」体験談、すべて歓迎です。
+小さなバグ修正より大きな変更は、まず issue を立てて設計の方向を擦り合わせてから着手してください。
+
+### 開発環境
+
+```bash
+git clone https://github.com/SnowWarri0r/cc-buddy-bridge
+cd cc-buddy-bridge
+python3.12 -m venv .venv
+.venv/bin/pip install -e '.[dev]'
+```
+
+`[dev]` extra で `pytest` + `ruff`（唯一の開発依存）が入ります。
+
+### テストと lint
+
+```bash
+.venv/bin/pytest -q                  # ~140 件、1 秒以内に完走
+.venv/bin/ruff check src/ tests/     # lint（CI が PR ごとに実行）
+```
+
+CI は **macOS / Linux / Windows × Python 3.11 / 3.12 / 3.13** のマトリクスで
+テストを実行します。すべてのセルが緑にならないと PR は通りません。
+ファイルシステムやパスを触る変更を入れると、Windows が真っ先に粗を炙り出します
+（NTFS は POSIX mode bits を無視、バックスラッシュ vs スラッシュ、など）。
+
+### ワイヤープロトコルに触る前に
+
+stick ファームウェアには [7 つの記録済みの鋭い角](#我々が踏んだファームウェアの罠と回避方法) があります。
+BLE の挙動が変な時は、`bleak` を追う前にまずそのセクションを目通ししてください。
+「リンクが flap し続ける」系の多くは罠 #1（非 ASCII バイトで BLE スタックがクラッシュ）か
+罠 #5（時計モードが HUD を奪う）に行き着きます。
+
+### コミットメッセージ
+
+題は短く、小文字、≤ 70 文字。本文で「なぜ」を一段落説明します。
+`git log --oneline` を眺めれば調子がつかめます。
+emoji は貼らないでください —— stick 側の sanitizer がどのみち剥がします。
+
+### 翻訳
+
+README は [English](README.md) / [简体中文](README.zh-CN.md) / [日本語](README.ja.md)
+の三言語をミラーしています。ユーザー向けの文を触ったときは、可能なら三つとも同期してください。
+無理なら PR 説明に「ほかの二言語は翻訳パスが必要」と書いてくれれば、フォローアップで対応します。
+
+### ファームウェアの PR
+
+buddy ファームウェアは [anthropics/claude-desktop-buddy](https://github.com/anthropics/claude-desktop-buddy) にあります。
+そちら側の変更は M5StickC Plus に書き込んでの検証が必須です —— ブリッジ側のモックでは
+ワイヤープロトコルのズレを拾えません。PR 説明には「実機検証済み」と「まだ理論段階」を
+明示的に書き分けてください。レビュアーは差分だけでは判別できません。
+
 ## ライセンス
 
 MIT。[LICENSE](LICENSE) を参照。
