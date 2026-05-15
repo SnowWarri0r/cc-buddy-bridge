@@ -179,6 +179,43 @@ Token 数对当日 `~/.claude/projects/*.jsonl` 里的 `usage.output_tokens` 求
 写死在 [`pricing.py`](src/cc_buddy_bridge/pricing.py)，要改/加模型直接编辑即可。
 这不是账单真相，只作为辅助提示。
 
+## 与 Claude Code `permissions` 配置的配合
+
+Claude Code 自己 `~/.claude/settings.json` 里的 `permissions` 块
+（`allow` / `ask` / `deny` 列表，加上 `defaultMode`）和本桥的智能匹配器
+**两套规则**共同决定一次工具调用走哪条路径。规则定义清楚，但还是写出来便于选对组合。
+
+每次 `PreToolUse` 事件：
+
+```
+matcher classify_command(hint)
+ ├─ "allow"  → bridge 直接返回 permissionDecision=allow（短路）
+ ├─ "ask"    → bridge 等 stick 按键 → 返回按键结果
+ └─ "default"→ bridge 不表态 → 由 Claude Code 的 settings.json + defaultMode 接管
+```
+
+**推荐组合**
+
+| Claude Code `defaultMode` | Matcher `strict` | 行为                                                                                                  |
+| ------------------------- | ---------------- | ----------------------------------------------------------------------------------------------------- |
+| `ask`（默认）              | `false`          | 平凡 bash 由 matcher 自动放行；危险 bash 走 stick；其它走 Claude Code 终端提示。                       |
+| `bypassPermissions`       | **`true`**       | **stick 是唯一的人工确认入口。** 平凡 bash 自动放行；其它一切（匹配/未匹配）都走 stick。终端不弹提示。 |
+| `bypassPermissions`       | `false`          | ⚠ 只有 matcher 的 `always_ask` 模式会走 stick；其它一切静默自动放行。daemon 启动时检测到这组合会打 WARNING。 |
+| `auto`                    | `false`          | 实质等同 `ask`——未匹配命令落到 Claude Code 的流程。                                                    |
+
+`strict` 写在 `~/.config/cc-buddy-bridge/matchers.toml`：
+
+```toml
+strict = true
+```
+
+daemon 启动时会用一行日志总结两边配置，方便你一眼看出有没有踩组合错配：
+
+```
+INFO cc_buddy_bridge.daemon: matcher: strict=False auto_allow=46 always_ask=53
+INFO cc_buddy_bridge.daemon: settings.json: permissions.defaultMode='auto' ask=0
+```
+
 ## 系统要求
 
 * macOS 12+ / Windows 10+ / 装了 BlueZ 的 Linux

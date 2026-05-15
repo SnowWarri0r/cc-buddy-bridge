@@ -123,3 +123,44 @@ def test_load_config_bad_toml_falls_back_to_defaults(tmp_path: Path):
     cfg_path.write_text("this is {not} [valid toml", encoding="utf-8")
     cfg = load_config(path=cfg_path)
     assert classify_command("ls", cfg) == "allow"
+
+
+# ---- strict mode ----
+
+def test_strict_mode_promotes_default_to_ask(tmp_path: Path):
+    cfg_path = tmp_path / "matchers.toml"
+    cfg_path.write_text("strict = true\n", encoding="utf-8")
+    cfg = load_config(path=cfg_path)
+    assert cfg.strict is True
+    # auto_allow still wins
+    assert classify_command("ls", cfg) == "allow"
+    # always_ask still wins
+    assert classify_command("rm -rf /tmp/x", cfg) == "ask"
+    # but now an unmatched command goes to the stick too
+    assert classify_command("some-random-binary --flag", cfg) == "ask"
+    # empty string also routes to stick under strict
+    assert classify_command("", cfg) == "ask"
+
+
+def test_strict_defaults_to_false(tmp_path: Path):
+    """A config file without a strict key shouldn't accidentally enable strict mode."""
+    cfg_path = tmp_path / "matchers.toml"
+    cfg_path.write_text('auto_allow = ["^foo( |$)"]\n', encoding="utf-8")
+    cfg = load_config(path=cfg_path)
+    assert cfg.strict is False
+    assert classify_command("some-random-binary", cfg) == "default"
+
+
+def test_strict_with_replace_defaults(tmp_path: Path):
+    """Both flags should compose."""
+    cfg_path = tmp_path / "matchers.toml"
+    cfg_path.write_text(
+        'strict = true\n'
+        'replace_defaults = true\n'
+        'auto_allow = ["^safe( |$)"]\n',
+        encoding="utf-8",
+    )
+    cfg = load_config(path=cfg_path)
+    assert classify_command("safe x", cfg) == "allow"
+    assert classify_command("ls", cfg) == "ask"  # ls no longer pre-approved
+    assert classify_command("rm x", cfg) == "ask"  # rm no longer always_ask
