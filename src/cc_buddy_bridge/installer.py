@@ -9,7 +9,6 @@ from __future__ import annotations
 import json
 import shutil
 import sys
-import sysconfig
 from datetime import datetime
 from pathlib import Path
 from typing import Any

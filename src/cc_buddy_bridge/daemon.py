@@ -11,12 +11,12 @@ from typing import Any, Optional
 from .ble import BuddyBLE
 from .ipc import IPCServer
 from .jsonl_tailer import JSONLTailer
-from .matchers import MatcherConfig, classify_command, load_config as load_matcher_config
+from .matchers import MatcherConfig, classify_command
+from .matchers import load_config as load_matcher_config
 from .protocol import (
     HEARTBEAT_KEEPALIVE,
     build_heartbeat,
     build_time_sync,
-    build_turn_event,
 )
 from .state import State
 

@@ -13,7 +13,6 @@ from cc_buddy_bridge.matchers import (
     load_config,
 )
 
-
 # ---- classify_command against baked-in defaults ----
 
 @pytest.fixture(scope="module")

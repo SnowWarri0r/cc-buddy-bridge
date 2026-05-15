@@ -11,7 +11,6 @@ so the scan result is cached under the device's advertised name.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import time
 from typing import Any, Awaitable, Callable, Optional
@@ -20,9 +19,9 @@ from bleak import BleakClient, BleakScanner
 from bleak.backends.device import BLEDevice
 
 from .protocol import (
-    LineAssembler,
     NUS_RX_UUID,
     NUS_TX_UUID,
+    LineAssembler,
     encode,
 )
 

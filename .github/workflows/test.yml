@@ -6,11 +6,27 @@ on:
   pull_request:
 
 jobs:
-  pytest:
+  lint:
+    # Lint is fast and OS-independent — single ubuntu job keeps CI cost down.
     runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install ruff
+        run: pip install -e '.[dev]'
+      - name: Ruff check
+        run: ruff check src/ tests/
+      # ruff format intentionally left out for now: adopting it would reformat
+      # ~25 files in one go. Re-enable once we've made that one-time pass.
+
+  pytest:
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
         python: ["3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4

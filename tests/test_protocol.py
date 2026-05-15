@@ -1,4 +1,3 @@
-import json
 
 from cc_buddy_bridge.protocol import (
     LineAssembler,
