@@ -24,7 +24,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0"]
+dev = ["pytest>=8.0", "ruff>=0.6"]
 
 [project.scripts]
 cc-buddy-bridge = "cc_buddy_bridge.cli:main"
@@ -35,3 +35,19 @@ where = ["src"]
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+extend-exclude = ["build", "dist", ".venv"]
+
+[tool.ruff.lint]
+# Start narrow: catch real correctness/cleanliness issues without arguing about
+# style. Pyflakes (F) covers unused/undefined names; pycodestyle errors (E) catch
+# syntax issues; isort (I) keeps imports tidy. Add more rule sets later if they
+# pay off.
+select = ["F", "E", "W", "I", "B"]
+ignore = [
+    "E501",  # line too long — line-length is advisory; lots of long log strings on purpose
+    "B008",  # function call in argument default — used intentionally for Path() defaults
+]

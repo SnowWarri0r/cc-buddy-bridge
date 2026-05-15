@@ -93,7 +93,6 @@ class IPCServer:
         self._port = None
 
     async def _on_conn(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-        peer = writer.get_extra_info("peername")
         try:
             line = await reader.readline()
             if not line:
