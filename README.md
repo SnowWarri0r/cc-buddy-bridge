@@ -344,16 +344,24 @@ The reference firmware has several sharp edges the wire protocol doesn't
 warn you about. Documenting them here so you don't re-debug them, and so
 the workarounds baked into this codebase have a visible rationale.
 
-### 1. Non-ASCII bytes crash the BLE stack
+### 1. Non-ASCII bytes corrupt rendering on the default font
 
-The 5×7 Adafruit GFX bitmap font table is ASCII-only; any byte in
-`0x80`–`0xFF` (i.e. every UTF-8 continuation byte and emoji leading
-byte) indexes past the glyph table and, in enough code paths, hard-
-resets the radio task within ~1 s of the heartbeat write.
+The stock firmware uses TFT_eSPI's default 5×7 GFX bitmap font, which is
+ASCII-only. Bytes in `0x80`–`0xFF` (every UTF-8 continuation byte and
+emoji leading byte) miss the glyph table; observably the radio task
+hard-resets within ~1 s of the heartbeat write in enough code paths.
+
+There's a **secret CJK path that nobody turned on**: the `M5StickCPlus`
+library bundles a 1.7 MB HZK16 GB2312 font with an
+`M5Display::loadHzk16(InternalHzk16)` API. Flipping it on would enable
+Simplified Chinese rendering (~7000 GB2312 chars at 16×16 px; covers
+Simplified Chinese only — not Traditional, Japanese kana, or Hangul).
+The stock firmware never calls it, and the bridge would need to convert
+UTF-8 → GBK before sending so the byte pairs hit the GB2312 lookup.
 
 **Workaround:** `sanitize_for_stick()` in `protocol.py` rewrites
-everything outside `0x20`–`0x7E` (and tab) to `?` before sending. CJK
-users will see rows of `?` on the stick, which is lossy but stable.
+everything outside `0x20`–`0x7E` (and tab) to `?` before sending.
+Lossy but stable.
 
 ### 2. `entries` wire order is oldest-first, not newest-first
 
