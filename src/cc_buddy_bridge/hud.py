@@ -48,6 +48,16 @@ def _battery_color(pct: int) -> str:
     return _ANSI_GREEN
 
 
+def _format_tokens(n: int) -> str:
+    """Compact human-readable token count. Caps at one decimal for readability."""
+    if n < 1_000:
+        return str(n)
+    if n < 1_000_000:
+        # 12.3K but show no decimal once we're past 100K (e.g. 850K not 850.0K)
+        return f"{n / 1_000:.1f}K" if n < 100_000 else f"{n // 1_000}K"
+    return f"{n / 1_000_000:.1f}M"
+
+
 def _battery_segment(pct: Optional[int], *, ascii_only: bool) -> Optional[str]:
     if not isinstance(pct, int):
         return None
@@ -136,9 +146,12 @@ def format_line(state: Optional[dict[str, Any]], *, ascii_only: bool = False) ->
         parts.append("UNSEC" if ascii_only else "⚠UNSEC")
     # sec=None (no status ack yet) → omit
 
-    # Today's estimated API cost — appears once it crosses ~1¢ so the line
-    # stays clean during idle sessions. Two decimals to fit `$NN.NN` (5 chars
-    # at typical daily usage). Pricing source: cc_buddy_bridge.pricing.
+    # Today's token output and estimated API cost. Tokens appear at 1K+; cost
+    # appears at ~1¢+ so the line stays clean during idle sessions. Tokens are
+    # the input that drives cost, so they sit together with tokens first.
+    tokens_today = state.get("tokens_today")
+    if isinstance(tokens_today, int) and tokens_today >= 1_000:
+        parts.append(_format_tokens(tokens_today))
     cost_today = state.get("cost_today")
     if isinstance(cost_today, (int, float)) and cost_today >= 0.01:
         parts.append(f"${cost_today:.2f}")

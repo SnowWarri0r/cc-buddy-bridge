@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from cc_buddy_bridge.hud import BAR_EMPTY, BAR_FULL, BAR_WIDTH, _bar, format_line
+from cc_buddy_bridge.hud import BAR_EMPTY, BAR_FULL, BAR_WIDTH, _bar, _format_tokens, format_line
 
 
 def test_format_none_state():
@@ -109,3 +109,39 @@ def test_format_cost_two_decimals_for_double_digits():
     state = {"ble_connected": True, "sec": True, "battery_pct": 80, "cost_today": 12.5}
     out = format_line(state)
     assert "$12.50" in out
+
+
+def test_token_formatter_thresholds():
+    assert _format_tokens(0) == "0"
+    assert _format_tokens(999) == "999"
+    assert _format_tokens(1_000) == "1.0K"
+    assert _format_tokens(12_345) == "12.3K"
+    assert _format_tokens(99_999) == "100.0K"  # right at the 100K boundary
+    assert _format_tokens(100_000) == "100K"   # past it, drop the decimal
+    assert _format_tokens(850_000) == "850K"
+    assert _format_tokens(999_999) == "999K"
+    assert _format_tokens(1_000_000) == "1.0M"
+    assert _format_tokens(1_234_567) == "1.2M"
+
+
+def test_format_tokens_shown_when_above_1k():
+    state = {"ble_connected": True, "sec": True, "battery_pct": 80, "tokens_today": 12_345}
+    out = format_line(state)
+    assert "12.3K" in out
+
+
+def test_format_tokens_hidden_below_1k():
+    state = {"ble_connected": True, "sec": True, "battery_pct": 80, "tokens_today": 850}
+    out = format_line(state)
+    # Don't render single-figure token counts — the line is for at-a-glance.
+    assert "850" not in out
+
+
+def test_format_tokens_and_cost_appear_together():
+    state = {
+        "ble_connected": True, "sec": True, "battery_pct": 80,
+        "tokens_today": 1_234_567, "cost_today": 4.20,
+    }
+    out = format_line(state)
+    # Tokens render before cost (input → derived spend reads naturally L→R).
+    assert out.index("1.2M") < out.index("$4.20")

@@ -22,7 +22,7 @@ buddy 固件官方只跟 Claude for macOS/Windows 桌面端配对。本项目让
 - **关键操作的物理 2FA** —— 全局设 `defaultMode: bypassPermissions`，把真正在意的几个工具丢进 `permissions.ask`。这些操作的 allow/deny 由桌面 buddy 上的 A/B 按键决定。
 - **智能匹配器** —— 平凡的 Bash（`ls`/`cat`/`grep`/...）自动放行；危险的（`rm`/`curl`/`git push`/...）总是询问；其余转给 stick 决策。可通过 TOML 覆盖默认规则。
 - **实时 stick HUD** —— 助手回复经 JSONL tailer 在 ~500 ms 内镜像到 stick（绕过 Stop hook 落盘竞态）。
-- **状态栏组件** —— `cc-buddy-bridge hud` 在终端 prompt 渲染电量 / 加密状态 / **当日预估 API 花销** / 待处理权限提示；可与 [claude-hud](https://github.com/jarrodwatts/claude-hud) 组合使用。
+- **状态栏组件** —— `cc-buddy-bridge hud` 在终端 prompt 渲染电量 / 加密状态 / **当日 token 数** / **当日预估 USD 花销** / 待处理权限提示；可与 [claude-hud](https://github.com/jarrodwatts/claude-hud) 组合使用。
 - **一行命令安装 + 开机自启** —— `cc-buddy-bridge install --service` 自动选对每个 OS 的后端：macOS 用 launchd、Linux 用 systemd 用户级 unit、Windows 用任务计划程序。
 - **自定义 GIF 角色** —— `cc-buddy-bridge push-character ./pack/` 通过 BLE 上传一整个动画包，自带分块流控。
 
@@ -166,17 +166,17 @@ Linux 特有的几个小坑：
 同一行还会经过的其它状态：
 
 ```
-🐾 🔋 96% 🔒                    # 链路加密、电量充足
-🐾 🔋 96% 🔒 $4.20              # 当日预估 API 花销（≥ $0.01 才显示）
-🐾 🔋 12% 🔒 $4.20 2run         # 低电量、花销、有会话在跑
-🐾 ⚠ approve: Bash              # stick 上有待处理权限提示
-🐾 ∅                            # stick 已断连（但 daemon 还活着）
-🐾 off                          # daemon 没在跑
+🐾 🔋 96% 🔒                          # 链路加密、电量充足
+🐾 🔋 96% 🔒 12.3K $0.42              # 当日 token（≥ 1K）与花销（≥ $0.01）
+🐾 🔋 12% 🔒 1.2M $8.50 2run          # 低电量、大用量、有会话在跑
+🐾 ⚠ approve: Bash                    # stick 上有待处理权限提示
+🐾 ∅                                  # stick 已断连（但 daemon 还活着）
+🐾 off                                # daemon 没在跑
 ```
 
-花销是基于当日 `~/.claude/projects/*.jsonl` 里每条 usage 记录的估算
-（input + output + 缓存读写 × 各模型费率）。费率表写死在
-[`pricing.py`](src/cc_buddy_bridge/pricing.py)，需要改/加模型直接编辑即可。
+Token 数对当日 `~/.claude/projects/*.jsonl` 里的 `usage.output_tokens` 求和。
+花销基于同一批记录估算（`input + output + 缓存读写 × 各模型费率`），费率表
+写死在 [`pricing.py`](src/cc_buddy_bridge/pricing.py)，要改/加模型直接编辑即可。
 这不是账单真相，只作为辅助提示。
 
 ## 系统要求
