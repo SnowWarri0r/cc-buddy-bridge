@@ -311,20 +311,37 @@ jq -r 'select(.source=="auto_allow") | .hint' ~/Library/Logs/cc-buddy-bridge-aud
 参考固件有几处线协议没说明的尖角。在这里记一笔，省得你重新 debug 一遍，
 也让代码里那些绕过逻辑的存在理由可见。
 
-### 1. 非 ASCII 字节会破坏默认字体的渲染
+### 1. UTF-8 多字节序列在 BLE 链路上被剪在字符中间
 
-固件用的是 TFT_eSPI 的默认 5×7 GFX 位图字体，仅 ASCII。`0x80`–`0xFF`
-范围的字节（所有 UTF-8 续位字节和 emoji 起始字节）会越过字体表索引；
-实测在足够多的代码路径里会在心跳写入后 ~1 秒内把 radio 任务硬重置。
+携带 CJK（或任何 UTF-8 多字节内容）的心跳很容易超过默认的 ATT
+Write-Without-Response 单包上限（`MTU − 3` 字节，默认 20）。
+[`bleak`](https://github.com/hbldh/bleak) 的 `write_gatt_char()`
+对 write-without-response **不会自动分包**——溢出部分被静默丢弃。
+固件收到的 JSON 在某个 UTF-8 多字节序列**中途**截断（比如"你"的
+`0xE4 0xBD 0xA0` 只剩头一个 `0xE4`）。ArduinoJson 解析失败；
+TFT_eSPI 的 `decodeUTF8()` 状态机一直等永不到来的续位字节，
+后续合法字节也被错误吃掉。渲染/BLE 任务进入异常状态，~1 秒后
+看到链路断开。
 
-**有一条没人打开的隐藏 CJK 通道**：`M5StickCPlus` 库内置了一份 1.7 MB
-的 HZK16 GB2312 字体，配套 API 是 `M5Display::loadHzk16(InternalHzk16)`。
-启用之后可以渲染简体中文（~7000 个 GB2312 字符，16×16 像素；只覆盖简体，
-不含繁体、日文假名、韩文谚文）。但官方固件从未调过这个函数；而且 bridge
-需要把 UTF-8 转成 GBK 再发送，才能让字节对落到 GB2312 查找表里。
+**之前我们吃过两次错诊，写在这里省得你重新踩：**
 
-**绕过：** `protocol.py` 里的 `sanitize_for_stick()` 在发送前把
-`0x20`–`0x7E`（外加 tab）以外的字节全部改写成 `?`。有损但稳定。
+- 第一版怪到固件 5×7 GFX 字体只有 ASCII（`96740fd`）。如果整段
+  CJK 字节序列**完整**到达固件，这判断本来没错——但根本就没完整到达。
+- 第二版发现 `M5StickCPlus` 库内置了 1.7 MB 的 HZK16 GB2312 字体 +
+  `loadHzk16(InternalHzk16)` 启用 API（`2099de1`）。事实对，但与症状
+  无关——被截断的字节根本进不到字体查找那一步。
+
+真正的根因是 [@omengye](https://github.com/omengye) 在他们的 fork
+里诊断出来的，credit 归他们。
+
+**当前的绕过**：`protocol.py` 里的 `sanitize_for_stick()` 仍把
+`0x20`–`0x7E`（外加 tab）以外的字节全部改成 `?`。比真正的修法保守得多
+也有损，但稳定。
+
+**待落地的正确修法**（在
+[#12](https://github.com/SnowWarri0r/cc-buddy-bridge/issues/12) 跟踪）：
+`BuddyBLE.send()` 按 `mtu_size − 3` 分包发送；放宽 sanitizer 让所有
+BMP 字符通过，只剥补充平面（emoji 主力）、代理项（surrogates）和控制字符。
 
 ### 2. `entries` 在线上的顺序是从旧到新，不是从新到旧
 

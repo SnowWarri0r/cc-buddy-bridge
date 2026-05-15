@@ -344,24 +344,40 @@ The reference firmware has several sharp edges the wire protocol doesn't
 warn you about. Documenting them here so you don't re-debug them, and so
 the workarounds baked into this codebase have a visible rationale.
 
-### 1. Non-ASCII bytes corrupt rendering on the default font
+### 1. Multi-byte UTF-8 strands get truncated mid-character on the BLE link
 
-The stock firmware uses TFT_eSPI's default 5×7 GFX bitmap font, which is
-ASCII-only. Bytes in `0x80`–`0xFF` (every UTF-8 continuation byte and
-emoji leading byte) miss the glyph table; observably the radio task
-hard-resets within ~1 s of the heartbeat write in enough code paths.
+A heartbeat carrying CJK (or any UTF-8 multi-byte content) can easily
+exceed the default 20-byte ATT Write-Without-Response payload (`MTU − 3`
+bytes per packet). [`bleak`](https://github.com/hbldh/bleak)'s
+`write_gatt_char()` does not auto-chunk write-without-response — the
+overflow is silently dropped. The firmware then sees a JSON message
+ending mid-UTF-8 sequence (e.g. a trailing `0xE4` with the two
+continuation bytes gone). ArduinoJson rejects the malformed JSON;
+TFT_eSPI's `decodeUTF8()` state machine gets stuck waiting for the
+continuation bytes that never arrive, corrupting subsequent reads. The
+render or BLE task wedges and the link visibly resets ~1 s later.
 
-There's a **secret CJK path that nobody turned on**: the `M5StickCPlus`
-library bundles a 1.7 MB HZK16 GB2312 font with an
-`M5Display::loadHzk16(InternalHzk16)` API. Flipping it on would enable
-Simplified Chinese rendering (~7000 GB2312 chars at 16×16 px; covers
-Simplified Chinese only — not Traditional, Japanese kana, or Hangul).
-The stock firmware never calls it, and the bridge would need to convert
-UTF-8 → GBK before sending so the byte pairs hit the GB2312 lookup.
+**Two earlier misdiagnoses we ate, so you don't have to:**
 
-**Workaround:** `sanitize_for_stick()` in `protocol.py` rewrites
-everything outside `0x20`–`0x7E` (and tab) to `?` before sending.
-Lossy but stable.
+- We first blamed the firmware's ASCII-only 5×7 GFX bitmap font
+  (`96740fd`). That would have been right *if* whole CJK byte
+  sequences ever reached the firmware — but they didn't.
+- We then noticed the `M5StickCPlus` library ships an unused 1.7 MB
+  HZK16 GB2312 font with a `loadHzk16(InternalHzk16)` API (`2099de1`).
+  True but moot — the corrupted bytes never reach the font lookup
+  either way.
+
+The real root cause was diagnosed by
+[@omengye](https://github.com/omengye) in their fork; full credit there.
+
+**Current workaround:** `sanitize_for_stick()` in `protocol.py` still
+rewrites everything outside `0x20`–`0x7E` (and tab) to `?`. Lossy and
+overly conservative relative to the real fix, but stable.
+
+**Pending proper fix** (tracked in [#12](https://github.com/SnowWarri0r/cc-buddy-bridge/issues/12)):
+chunk `BuddyBLE.send()` writes at `mtu_size − 3`, relax the sanitizer
+to pass all BMP codepoints through, and strip only supplementary-plane
+(most emoji), surrogates, and control chars.
 
 ### 2. `entries` wire order is oldest-first, not newest-first
 
