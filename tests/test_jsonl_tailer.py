@@ -53,8 +53,8 @@ def _sync_sweep(root: Path) -> JSONLTailer:
     """Helper: spin up a tailer, run the initial sweep, return it. No file watching."""
     captured: list = []
 
-    async def cb(c, t, e):
-        captured.append((c, t, e))
+    async def cb(c, t, cc, ct, e):
+        captured.append((c, t, cc, ct, e))
 
     tailer = JSONLTailer(cb, root=root)
     asyncio.run(tailer._initial_sweep())
@@ -94,6 +94,30 @@ def test_last_assistant_content_ignores_user_messages(tmp_path: Path):
     ])
     tailer = _sync_sweep(tmp_path)
     assert tailer.last_assistant_content(str(jsonl)) is None
+
+
+def test_cost_accumulates_alongside_tokens(tmp_path: Path):
+    """Cost per file should be summed from usage records using the model's rates."""
+    jsonl = tmp_path / "s.jsonl"
+    _write_jsonl(jsonl, [
+        {"type": "assistant", "message": {
+            "role": "assistant",
+            "model": "claude-sonnet-4-6",
+            "content": [{"type": "text", "text": "hi"}],
+            "usage": {"input_tokens": 1_000_000, "output_tokens": 1_000_000},
+        }},
+        {"type": "assistant", "message": {
+            "role": "assistant",
+            "model": "claude-opus-4-7",
+            "content": [{"type": "text", "text": "hi"}],
+            "usage": {"output_tokens": 1_000_000},
+        }},
+    ])
+    tailer = _sync_sweep(tmp_path)
+    # Sonnet (3 + 15) + Opus (75) = $93
+    assert abs(tailer._cost_per_file[str(jsonl)] - 93.0) < 1e-6
+    # Both records lack a timestamp, so today's dict stays empty.
+    assert tailer._today_cost_per_file.get(str(jsonl), 0.0) == 0.0
 
 
 def test_last_assistant_content_handles_missing_content(tmp_path: Path):

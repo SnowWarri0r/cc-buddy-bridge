@@ -24,7 +24,7 @@ you approve or deny right from the stick's buttons.
 - **Physical 2FA for risky tools** — set `defaultMode: bypassPermissions` everywhere except the desk buddy. A/B buttons on the stick decide allow/deny for the few operations you flagged on `permissions.ask`.
 - **Smart matcher** — auto-allow trivial Bash (`ls`/`cat`/`grep`/...), always-ask risky (`rm`/`curl`/`git push`/...), defer the rest to the stick. TOML-overridable.
 - **Live stick HUD** — assistant replies mirror to the stick within ~500 ms via a JSONL tailer (no Stop-hook flush race).
-- **Statusline** — `cc-buddy-bridge hud` renders battery / encryption / pending prompts in your prompt bar; composes with [claude-hud](https://github.com/jarrodwatts/claude-hud).
+- **Statusline** — `cc-buddy-bridge hud` renders battery / encryption / **estimated API spend today** / pending prompts in your prompt bar; composes with [claude-hud](https://github.com/jarrodwatts/claude-hud).
 - **One-command install + autostart** — `cc-buddy-bridge install --service` picks the right backend per OS: launchd (macOS), systemd user unit (Linux), Task Scheduler (Windows).
 - **Custom GIF characters** — `cc-buddy-bridge push-character ./pack/` uploads a folder of frames over BLE with chunked flow control.
 
@@ -189,12 +189,19 @@ Live in iTerm2 — paw print, battery progress bar, encryption lock, running ses
 Other states the same line goes through:
 
 ```
-🐾 🔋 96% 🔒              # healthy, encrypted link
-🐾 🔋 12% 🔒 2run         # low battery, sessions running
-🐾 ⚠ approve: Bash        # permission prompt waiting on the stick
-🐾 ∅                      # stick disconnected (but daemon is alive)
-🐾 off                    # daemon not running
+🐾 🔋 96% 🔒                    # healthy, encrypted link
+🐾 🔋 96% 🔒 $4.20              # estimated API spend today, appears once it crosses ~$0.01
+🐾 🔋 12% 🔒 $4.20 2run         # low battery, cost, sessions running
+🐾 ⚠ approve: Bash              # permission prompt waiting on the stick
+🐾 ∅                            # stick disconnected (but daemon is alive)
+🐾 off                          # daemon not running
 ```
+
+Cost is a per-message estimate over the day's `~/.claude/projects/*.jsonl`
+transcripts (input + output + cache writes/reads × per-model rates).
+Rates table lives in [`pricing.py`](src/cc_buddy_bridge/pricing.py) — edit
+to override or add models. Not a billing source of truth; treat as a
+heads-up.
 
 ## Requirements
 
