@@ -204,6 +204,45 @@ rates`. Rates table lives in [`pricing.py`](src/cc_buddy_bridge/pricing.py) —
 edit to override or add models. Not a billing source of truth; treat
 as a heads-up.
 
+## Working with Claude Code's `permissions` config
+
+Claude Code's own `~/.claude/settings.json` `permissions` block (`allow` /
+`ask` / `deny` lists, plus `defaultMode`) and this bridge's smart matcher
+*both* decide what happens on a tool call. The interaction is well-defined,
+but worth spelling out so you can pick the right combo.
+
+For every `PreToolUse` event:
+
+```
+matcher classify_command(hint)
+ ├─ "allow"  → bridge returns permissionDecision=allow  (short-circuit)
+ ├─ "ask"    → bridge waits on stick → returns the button's decision
+ └─ "default"→ bridge returns no opinion → Claude Code's settings.json + defaultMode run
+```
+
+**Recommended pairings**
+
+| Claude Code `defaultMode` | Matcher `strict` | Behaviour                                                                                                              |
+| ------------------------- | ---------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `ask` (the default)       | `false`          | Trivial bash auto-approved by matcher; risky bash routes to stick; everything else gets Claude Code's terminal prompt. |
+| `bypassPermissions`       | **`true`**       | **Stick is the sole human-in-the-loop.** Trivial bash auto-approved; everything else (matched OR unmatched) routes to the stick. No terminal prompts. |
+| `bypassPermissions`       | `false`          | ⚠ Only matcher's `always_ask` patterns gate at the stick; everything else silently auto-approves. The daemon logs a warning at startup if it detects this combo. |
+| `auto`                    | `false`          | Same as `ask` for our purposes — unmatched commands fall through to Claude Code's flow.                                |
+
+`strict` lives in `~/.config/cc-buddy-bridge/matchers.toml`:
+
+```toml
+strict = true
+```
+
+The daemon logs a one-line summary of both configs at startup so you can
+spot misalignments quickly:
+
+```
+INFO cc_buddy_bridge.daemon: matcher: strict=False auto_allow=46 always_ask=53
+INFO cc_buddy_bridge.daemon: settings.json: permissions.defaultMode='auto' ask=0
+```
+
 ## Requirements
 
 * macOS 12+ / Windows 10+ / Linux with BlueZ

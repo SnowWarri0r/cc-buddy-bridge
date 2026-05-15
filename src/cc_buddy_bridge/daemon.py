@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from pathlib import Path
 from typing import Any, Optional
 
 from .ble import BuddyBLE
@@ -70,6 +71,7 @@ class Daemon:
     # ---- entry ----
 
     async def run(self) -> None:
+        _log_permission_config_summary(self.matchers)
         await self.ipc.start()
         tasks = [
             asyncio.create_task(self.ipc.serve_forever(), name="ipc"),
@@ -568,3 +570,57 @@ def _first_text_block(content: list) -> str:
             if isinstance(text, str) and text.strip():
                 return text.strip()
     return ""
+
+
+def _log_permission_config_summary(matchers: MatcherConfig) -> None:
+    """One-shot log at startup: how does the matcher interact with Claude Code's
+    own permissions config? Flags the two most confusing misalignments:
+
+    1. defaultMode == 'bypassPermissions' AND matcher is non-strict — the stick
+       only gates always_ask patterns; everything else is silently bypassed.
+    2. matcher.strict but defaultMode unsuitable — strict mode wants
+       bypassPermissions, otherwise unmatched commands still go through Claude
+       Code's normal prompt UI.
+    """
+    import json
+    settings_path = Path.home() / ".claude" / "settings.json"
+    default_mode: Optional[str] = None
+    ask_count = 0
+    if settings_path.exists():
+        try:
+            with settings_path.open() as f:
+                data = json.load(f)
+            perms = data.get("permissions") or {}
+            default_mode = perms.get("defaultMode")
+            ask_count = len(perms.get("ask") or [])
+        except (OSError, ValueError) as e:
+            log.debug("could not read settings.json for permission summary: %s", e)
+
+    matcher_summary = (
+        f"matcher: strict={matchers.strict} "
+        f"auto_allow={len(matchers.auto_allow)} "
+        f"always_ask={len(matchers.always_ask)}"
+    )
+    log.info("%s", matcher_summary)
+    log.info(
+        "settings.json: permissions.defaultMode=%r ask=%d",
+        default_mode or "(unset)", ask_count,
+    )
+
+    if default_mode == "bypassPermissions" and not matchers.strict:
+        log.warning(
+            "permissions.defaultMode='bypassPermissions' + matcher.strict=false: "
+            "the stick gates *only* always_ask patterns (%d defined); everything "
+            "else is auto-approved without any human-in-the-loop. To put the "
+            "stick in front of every un-vetted command, set `strict = true` in "
+            "your matchers.toml.",
+            len(matchers.always_ask),
+        )
+    elif matchers.strict and default_mode not in ("bypassPermissions", None):
+        log.warning(
+            "matcher.strict=true but permissions.defaultMode=%r: unmatched "
+            "commands will route to the stick AND Claude Code may still surface "
+            "its own terminal prompt depending on the mode. Strict mode is "
+            "designed to pair with defaultMode='bypassPermissions'.",
+            default_mode,
+        )
