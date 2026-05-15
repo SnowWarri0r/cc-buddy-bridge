@@ -227,6 +227,51 @@ INFO cc_buddy_bridge.daemon: matcher: strict=False auto_allow=46 always_ask=53
 INFO cc_buddy_bridge.daemon: settings.json: permissions.defaultMode='auto' ask=0
 ```
 
+## 監査ログ
+
+すべての `PreToolUse` の判定が JSONL ファイルに追記されるので、後から
+「何が許可された / 拒否された / 委ねられた」を見返せます。`bypassPermissions`
+モードでほとんどの判定が目に触れない場合に特に有用です。
+
+デフォルトパス：
+
+| OS      | パス                                                                |
+| ------- | ------------------------------------------------------------------- |
+| macOS   | `~/Library/Logs/cc-buddy-bridge-audit.jsonl`                        |
+| Linux   | `$XDG_DATA_HOME/cc-buddy-bridge/audit.jsonl`（または `~/.local/share/...`）|
+| Windows | `%LOCALAPPDATA%\cc-buddy-bridge\audit.jsonl`                        |
+
+`CC_BUDDY_BRIDGE_AUDIT` 環境変数で上書き可能。
+
+判定 1 件につき 1 行。フィールド：
+
+```json
+{"ts":"2026-05-16T00:15:12.690+08:00","session":"c461b71c","tool":"Bash",
+ "hint":"git status -s","matcher":"allow","decision":"allow","source":"auto_allow"}
+```
+
+| フィールド  | 意味                                                                   |
+| ----------- | ---------------------------------------------------------------------- |
+| `ts`        | ISO-8601 ローカルタイムスタンプ（オフセット付き）                       |
+| `session`   | Claude Code セッション ID の先頭 8 文字                                  |
+| `tool`      | ツール名（`Bash`、`Edit` など）                                          |
+| `hint`      | 実行内容の短いサマリ（200 文字に切り詰め）                                |
+| `matcher`   | マッチャー分類：`allow` / `ask` / `default`                              |
+| `decision`  | ブリッジが返した値：`allow` / `deny` / `null`（判定なし）                |
+| `source`    | `auto_allow` / `stick` / `timeout` / `defer` / `ble_disconnected`       |
+| `elapsed_s` | stick との往復秒数（stick が関わったときのみ）                            |
+
+よく使うクエリ：
+
+```bash
+# 今日 stick で拒否したもの
+jq 'select(.decision=="deny")' ~/Library/Logs/cc-buddy-bridge-audit.jsonl
+
+# 今週の自動許可コマンド頻度トップ
+jq -r 'select(.source=="auto_allow") | .hint' ~/Library/Logs/cc-buddy-bridge-audit.jsonl \
+  | awk '{print $1}' | sort | uniq -c | sort -rn | head
+```
+
 ## 動作環境
 
 * macOS 12+ / Windows 10+ / BlueZ のある Linux

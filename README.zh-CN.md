@@ -216,6 +216,49 @@ INFO cc_buddy_bridge.daemon: matcher: strict=False auto_allow=46 always_ask=53
 INFO cc_buddy_bridge.daemon: settings.json: permissions.defaultMode='auto' ask=0
 ```
 
+## 审计日志
+
+每条 `PreToolUse` 决策都会以 JSONL 形式追加到本地审计文件，便于事后回顾哪些被放行、被拒绝、被忽略——尤其在 `bypassPermissions` 模式下，大多数决策不会经过你眼前。
+
+默认位置：
+
+| 系统    | 路径                                                              |
+| ------- | ----------------------------------------------------------------- |
+| macOS   | `~/Library/Logs/cc-buddy-bridge-audit.jsonl`                      |
+| Linux   | `$XDG_DATA_HOME/cc-buddy-bridge/audit.jsonl`（或 `~/.local/share/...`）|
+| Windows | `%LOCALAPPDATA%\cc-buddy-bridge\audit.jsonl`                      |
+
+可以用环境变量 `CC_BUDDY_BRIDGE_AUDIT` 覆盖路径。
+
+每条一行，字段：
+
+```json
+{"ts":"2026-05-16T00:15:12.690+08:00","session":"c461b71c","tool":"Bash",
+ "hint":"git status -s","matcher":"allow","decision":"allow","source":"auto_allow"}
+```
+
+| 字段        | 含义                                                                       |
+| ----------- | -------------------------------------------------------------------------- |
+| `ts`        | ISO-8601 本地带时区时间戳                                                   |
+| `session`   | Claude Code 会话 id 前 8 位                                                 |
+| `tool`      | 工具名（`Bash`、`Edit` 等）                                                  |
+| `hint`      | 命令/路径短摘要（截断到 200 字符）                                            |
+| `matcher`   | 匹配器分类：`allow` / `ask` / `default`                                      |
+| `decision`  | 桥实际返回：`allow` / `deny` / `null`（未表态）                              |
+| `source`    | `auto_allow` / `stick` / `timeout` / `defer` / `ble_disconnected`           |
+| `elapsed_s` | 与 stick 往返耗时（秒），仅在 stick 参与时存在                                |
+
+常用查询：
+
+```bash
+# 今天我在 stick 上拒了哪些
+jq 'select(.decision=="deny")' ~/Library/Logs/cc-buddy-bridge-audit.jsonl
+
+# 本周自动放行频次 top N
+jq -r 'select(.source=="auto_allow") | .hint' ~/Library/Logs/cc-buddy-bridge-audit.jsonl \
+  | awk '{print $1}' | sort | uniq -c | sort -rn | head
+```
+
 ## 系统要求
 
 * macOS 12+ / Windows 10+ / 装了 BlueZ 的 Linux

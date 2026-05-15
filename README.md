@@ -243,6 +243,51 @@ INFO cc_buddy_bridge.daemon: matcher: strict=False auto_allow=46 always_ask=53
 INFO cc_buddy_bridge.daemon: settings.json: permissions.defaultMode='auto' ask=0
 ```
 
+## Audit log
+
+Every `PreToolUse` decision is appended to a JSONL file so you can review
+later what was let through, denied, or deferred — especially valuable
+under `bypassPermissions` where most decisions never reach your eyes.
+
+Default location:
+
+| OS      | Path                                                      |
+| ------- | --------------------------------------------------------- |
+| macOS   | `~/Library/Logs/cc-buddy-bridge-audit.jsonl`              |
+| Linux   | `$XDG_DATA_HOME/cc-buddy-bridge/audit.jsonl` (or `~/.local/share/...`) |
+| Windows | `%LOCALAPPDATA%\cc-buddy-bridge\audit.jsonl`              |
+
+Override with the `CC_BUDDY_BRIDGE_AUDIT` env var.
+
+One line per decision; fields:
+
+```json
+{"ts":"2026-05-16T00:15:12.690+08:00","session":"c461b71c","tool":"Bash",
+ "hint":"git status -s","matcher":"allow","decision":"allow","source":"auto_allow"}
+```
+
+| Field      | Meaning                                                          |
+| ---------- | ---------------------------------------------------------------- |
+| `ts`       | ISO-8601 local timestamp with offset                             |
+| `session`  | First 8 chars of the Claude Code session id                      |
+| `tool`     | Tool name (`Bash`, `Edit`, ...)                                  |
+| `hint`     | Short summary of what's being run (truncated to 200 chars)       |
+| `matcher`  | Matcher classification: `allow` / `ask` / `default`              |
+| `decision` | What the bridge returned: `allow` / `deny` / `null` (deferred)   |
+| `source`   | `auto_allow` / `stick` / `timeout` / `defer` / `ble_disconnected`|
+| `elapsed_s`| Round-trip seconds (only present when the stick was involved)    |
+
+Quick recipes:
+
+```bash
+# "What did I deny on the stick today?"
+jq 'select(.decision=="deny")' ~/Library/Logs/cc-buddy-bridge-audit.jsonl
+
+# "Top auto-allowed commands this week"
+jq -r 'select(.source=="auto_allow") | .hint' ~/Library/Logs/cc-buddy-bridge-audit.jsonl \
+  | awk '{print $1}' | sort | uniq -c | sort -rn | head
+```
+
 ## Requirements
 
 * macOS 12+ / Windows 10+ / Linux with BlueZ
