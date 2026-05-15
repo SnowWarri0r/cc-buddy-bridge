@@ -261,7 +261,35 @@ INFO cc_buddy_bridge.daemon: settings.json: permissions.defaultMode='auto' ask=0
 | `source`    | `auto_allow` / `stick` / `timeout` / `defer` / `ble_disconnected`       |
 | `elapsed_s` | stick との往復秒数（stick が関わったときのみ）                            |
 
-よく使うクエリ：
+### 表示する
+
+`cc-buddy-bridge audit` が公式のビューアです。カラー、整列、tail / フィルター / follow に対応：
+
+```bash
+cc-buddy-bridge audit                       # 直近 20 件
+cc-buddy-bridge audit -n 100                # 直近 100 件
+cc-buddy-bridge audit -f                    # 新着を追跡（Ctrl+C で終了）
+cc-buddy-bridge audit --decision deny       # 拒否したものだけ
+cc-buddy-bridge audit --source stick        # stick で判定したラウンドだけ
+cc-buddy-bridge audit --tool Edit -n 50     # 直近 50 件の Edit 呼び出し
+cc-buddy-bridge audit --path                # 監査ファイルパスを表示して終了
+cc-buddy-bridge audit --ascii               # 色なし（パイプ / 非対応端末向け）
+```
+
+出力例：
+
+```
+# audit log: /Users/snow/Library/Logs/cc-buddy-bridge-audit.jsonl
+00:21:09.029 Bash     —     defer       sleep 8 && gh run list --repo ...
+00:30:10.212 Bash     allow auto_allow  cat >> tests/test_audit.py <<'EOF' ...
+00:34:55.871 Bash     deny  stick       git push origin main --force
+```
+
+色：`allow` は緑、`deny` は赤、`—`（判定なし / 委任）はディム。source 列は `stick`（人がボタンを押した）が黄色、`timeout` が赤、それ以外はディム。
+
+### 生の jq レシピ
+
+サブコマンドを使わず jq で直接見たい場合：
 
 ```bash
 # 今日 stick で拒否したもの
