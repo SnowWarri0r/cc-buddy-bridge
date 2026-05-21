@@ -183,9 +183,9 @@ another statusline plugin? You can compose both — wrap them in a small
 shell script and concatenate outputs; statusLine accepts multi-line
 responses.
 
-Live in iTerm2 — paw print, battery progress bar, encryption lock, running session count:
+Live in iTerm2 — paw, battery bar, encryption lock, today's tokens, today's cost, running session count:
 
-<p align="center"><img src="docs/img/statusline.png" alt="cc-buddy-bridge hud — paw, full green battery bar, 100%, lock, 1run" width="436"></p>
+<p align="center"><img src="docs/img/statusline.png" alt="cc-buddy-bridge hud — paw, full green battery bar at 98%, lock, 101K tokens, $106.02 cost, 1 running session" width="580"></p>
 
 Other states the same line goes through:
 
@@ -592,6 +592,16 @@ Changes there need a flashed M5StickC Plus to verify — bridge-side mocks
 won't catch wire-protocol misalignments. Be explicit in the PR description
 about what you've tested vs. what's still theory; reviewers can't tell from
 the diff alone.
+
+## Star history
+
+<a href="https://star-history.com/#SnowWarri0r/cc-buddy-bridge&Date">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=SnowWarri0r/cc-buddy-bridge&type=Date&theme=dark" />
+    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=SnowWarri0r/cc-buddy-bridge&type=Date" />
+    <img alt="Star history chart for SnowWarri0r/cc-buddy-bridge" src="https://api.star-history.com/svg?repos=SnowWarri0r/cc-buddy-bridge&type=Date" />
+  </picture>
+</a>
 
 ## License
 
