@@ -25,7 +25,7 @@ buddy 固件官方只跟 Claude for macOS/Windows 桌面端配对。本项目让
 - **状态栏组件** —— `cc-buddy-bridge hud` 在终端 prompt 渲染电量 / 加密状态 / **当日 token 数** / **当日预估 USD 花销** / 待处理权限提示；可与 [claude-hud](https://github.com/jarrodwatts/claude-hud) 组合使用。
 - **一行命令安装 + 开机自启** —— `cc-buddy-bridge install --service` 自动选对每个 OS 的后端：macOS 用 launchd、Linux 用 systemd 用户级 unit、Windows 用任务计划程序。
 - **自定义 GIF 角色** —— `cc-buddy-bridge push-character ./pack/` 通过 BLE 上传一整个动画包，自带分块流控。
-- **新版本提示** —— daemon 每天后台轮询一次 GitHub releases；有新版时 hud 多一段 `↑ vX.Y.Z`。`cc-buddy-bridge check-update` 显式触发；环境变量 `CC_BUDDY_BRIDGE_NO_UPDATE_CHECK=1` 关闭。
+- **新版本提示 + 自更新** —— daemon 每天后台轮询一次 GitHub releases；有新版时 hud 多一段 `↑ vX.Y.Z`。`cc-buddy-bridge check-update` 显式查询，`cc-buddy-bridge update` 一键拉新代码 + 重装 + 重启 daemon。轮询用 `CC_BUDDY_BRIDGE_NO_UPDATE_CHECK=1` 关闭。
 
 ## 工作原理
 
@@ -312,7 +312,27 @@ cc-buddy-bridge check-update
 
 有新版时退出码为 `1`，否则 `0`——便于脚本检测。
 
-隐私层面：每天一次 HTTPS 请求到 api.github.com。完全关掉：
+### 一键升级
+
+```bash
+cc-buddy-bridge update            # 提示 y/N 后执行
+cc-buddy-bridge update -y         # 跳过提示（脚本 / CI 友好）
+```
+
+等价于在 repo 根 `git pull && pip install -e .`，然后通过你安装服务时选择的
+后端（launchd / systemd user unit / Task Scheduler）重启 daemon。会在以下
+情形提前安全停手：
+
+- 不是 git checkout（你装的是 wheel）—— 让你回到 pip 自己升级
+- 有未提交本地改动 —— 先 stash 或 commit，绝不会把你的工作丢掉
+- 不是 tty 且没传 `-y` —— 拒绝盲提示
+
+如果你没装服务（手动跑 `cc-buddy-bridge daemon`），install 步骤照样执行，
+最后会提醒你"自己重启 daemon"。
+
+### 隐私
+
+每天一次 HTTPS 请求到 api.github.com。完全关掉：
 
 ```bash
 export CC_BUDDY_BRIDGE_NO_UPDATE_CHECK=1
