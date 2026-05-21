@@ -67,6 +67,13 @@ def main(argv: list[str] | None = None) -> int:
     p_update.add_argument("--no-cache", action="store_true",
                           help="Ignore cache; always hit the network (default already does)")
 
+    p_upgrade = sub.add_parser(
+        "update",
+        help="Pull latest release, reinstall the package, and restart the daemon",
+    )
+    p_upgrade.add_argument("-y", "--yes", action="store_true",
+                           help="Skip the confirmation prompt")
+
     p_audit = sub.add_parser(
         "audit",
         help="Show the PreToolUse decision audit log (tail + filter + follow)",
@@ -131,6 +138,9 @@ def main(argv: list[str] | None = None) -> int:
         info = check(force=True)
         print(render_cli(info))
         return 1 if info.has_update else 0
+    if args.cmd == "update":
+        from .update import run_update
+        return run_update(yes=args.yes)
 
     return 1
 
