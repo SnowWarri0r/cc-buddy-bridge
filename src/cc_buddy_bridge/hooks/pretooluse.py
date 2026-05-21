@@ -47,13 +47,14 @@ def main() -> int:
         "hint": _summarize(payload.get("tool_input")),
         "cwd": payload.get("cwd", ""),
     }
-    resp = post(event, timeout=BLOCK_TIMEOUT_SECS)
+    resp = post(event, timeout=BLOCK_TIMEOUT_SECS, connect_timeout=5.0)
     if resp is None or not resp.get("ok"):
         # Daemon unreachable or errored — defer to Claude Code's default behavior.
         return 0
     decision = resp.get("decision")
     if decision not in ("allow", "deny", "ask"):
-        return 0
+        # No explicit decision (e.g. "no matcher → default") — treat as allow.
+        decision = "allow"
     out = {
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",

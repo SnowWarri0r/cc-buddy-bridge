@@ -58,12 +58,21 @@ def post(
     event: dict[str, Any],
     socket_path: Optional[str] = None,
     timeout: float = DEFAULT_TIMEOUT_SECS,
+    connect_timeout: float = DEFAULT_TIMEOUT_SECS,
 ) -> Optional[dict[str, Any]]:
-    """Send one JSON event, read one JSON response, close. Returns None on any error."""
+    """Send one JSON event, read one JSON response, close. Returns None on any error.
+
+    ``connect_timeout`` caps the TCP handshake (default: same as ``timeout``).
+    ``timeout`` caps waiting for the daemon's response once connected.
+    Separating the two prevents port-exhaustion stalls from blocking for the
+    full ``timeout`` value (e.g. 320 s for pretooluse) at the connect step.
+    """
     transport = make_transport(socket_path)
     s: Optional[_socket.socket] = None
     try:
-        s = transport.sync_connect(timeout)
+        s = transport.sync_connect(connect_timeout)
+        # Switch to the (possibly longer) read timeout after connect succeeds.
+        s.settimeout(timeout)
         s.sendall((json.dumps(event, ensure_ascii=False) + "\n").encode("utf-8"))
         # Read until newline.
         buf = bytearray()
