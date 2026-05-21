@@ -160,9 +160,9 @@ Linux 特有的几个小坑：
 
 已经在用 [claude-hud](https://github.com/jarrodwatts/claude-hud) 或别的状态栏插件？两者可以共存——写个小 shell 脚本拼接两边的输出即可，statusLine 接受多行响应。
 
-实拍 iTerm2——爪印、电量进度条、加密锁、运行中的会话数：
+实拍 iTerm2——爪印、电量进度条、加密锁、当日 token 数、当日花销、运行中的会话数：
 
-<p align="center"><img src="docs/img/statusline.png" alt="cc-buddy-bridge hud — 爪印、满格绿色电量条、100%、锁、1run" width="436"></p>
+<p align="center"><img src="docs/img/statusline.png" alt="cc-buddy-bridge hud — 爪印、电量条 98%、锁、101K tokens、$106.02、1 个会话在跑" width="580"></p>
 
 同一行还会经过的其它状态：
 
@@ -520,6 +520,16 @@ README 三语版本互为镜像：[English](README.md) / [简体中文](README.z
 ### 固件 PR
 
 buddy 固件在 [anthropics/claude-desktop-buddy](https://github.com/anthropics/claude-desktop-buddy)。那边的改动需要烧到 M5StickC Plus 上验证——bridge 侧的 mock 抓不到线协议错配。PR 描述里明确写清"实测过的"和"还在推理的"——光看 diff 评审者分不清楚。
+
+## Star 趋势
+
+<a href="https://star-history.com/#SnowWarri0r/cc-buddy-bridge&Date">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=SnowWarri0r/cc-buddy-bridge&type=Date&theme=dark" />
+    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=SnowWarri0r/cc-buddy-bridge&type=Date" />
+    <img alt="SnowWarri0r/cc-buddy-bridge 的 star 历史曲线" src="https://api.star-history.com/svg?repos=SnowWarri0r/cc-buddy-bridge&type=Date" />
+  </picture>
+</a>
 
 ## 许可证
 

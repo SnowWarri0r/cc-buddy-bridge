@@ -168,9 +168,9 @@ ASCII 専用ターミナルの場合：`cc-buddy-bridge hud --ascii`。
 プラグインを使っていますか？ 両方を組み合わせられます——小さなシェルスクリプトで両者の
 出力を連結するだけで OK。statusLine は複数行レスポンスを受け付けます。
 
-iTerm2 での実機キャプチャ —— 肉球、バッテリープログレスバー、暗号化ロック、稼働中セッション数：
+iTerm2 での実機キャプチャ —— 肉球、バッテリーバー、暗号化ロック、当日のトークン数、当日のコスト、稼働中セッション数：
 
-<p align="center"><img src="docs/img/statusline.png" alt="cc-buddy-bridge hud — 肉球、緑色フルのバッテリーバー、100%、ロック、1run" width="436"></p>
+<p align="center"><img src="docs/img/statusline.png" alt="cc-buddy-bridge hud — 肉球、98% のバッテリーバー、ロック、101K トークン、$106.02、1 セッション稼働中" width="580"></p>
 
 同じ行が遷移するその他の状態：
 
@@ -563,6 +563,16 @@ buddy ファームウェアは [anthropics/claude-desktop-buddy](https://github.
 そちら側の変更は M5StickC Plus に書き込んでの検証が必須です —— ブリッジ側のモックでは
 ワイヤープロトコルのズレを拾えません。PR 説明には「実機検証済み」と「まだ理論段階」を
 明示的に書き分けてください。レビュアーは差分だけでは判別できません。
+
+## Star ヒストリー
+
+<a href="https://star-history.com/#SnowWarri0r/cc-buddy-bridge&Date">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=SnowWarri0r/cc-buddy-bridge&type=Date&theme=dark" />
+    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=SnowWarri0r/cc-buddy-bridge&type=Date" />
+    <img alt="SnowWarri0r/cc-buddy-bridge の star 履歴グラフ" src="https://api.star-history.com/svg?repos=SnowWarri0r/cc-buddy-bridge&type=Date" />
+  </picture>
+</a>
 
 ## ライセンス
 
