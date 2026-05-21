@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cc-buddy-bridge"
-version = "0.1.0"
+version = "0.1.1"
 description = "Bridge Claude Code CLI sessions to the claude-desktop-buddy BLE hardware (bypasses the desktop app)."
 readme = "README.md"
 license = { text = "MIT" }
