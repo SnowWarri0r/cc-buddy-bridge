@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
+import getpass
 import shutil
 import subprocess
 import sys
-import getpass
 from pathlib import Path
 
 from .logging_setup import log_path as _project_log_path

@@ -32,12 +32,13 @@ def main(argv: list[str] | None = None) -> int:
     p_install = sub.add_parser("install", help="Register hooks in ~/.claude/settings.json")
     p_install.add_argument(
         "--service", action="store_true",
-        help="Install the auto-start service (launchd on macOS, Task Scheduler on Windows) instead of registering hooks",
+        help="Install a user-level service so the daemon auto-starts on login "
+        "(macOS: launchd agent; Linux: systemd user unit; Windows: Task Scheduler) instead of registering hooks",
     )
     p_uninstall = sub.add_parser("uninstall", help="Remove cc-buddy-bridge hooks from ~/.claude/settings.json")
     p_uninstall.add_argument(
         "--service", action="store_true",
-        help="Remove the auto-start service instead of removing hooks",
+        help="Remove the user-level service instead of removing hooks",
     )
     sub.add_parser("status", help="Show install status")
 
@@ -58,6 +59,22 @@ def main(argv: list[str] | None = None) -> int:
         help="Upload a GIF character pack folder to the stick (manifest.json + *.gif)",
     )
     p_push.add_argument("path", help="Path to the character folder")
+
+    p_audit = sub.add_parser(
+        "audit",
+        help="Show the PreToolUse decision audit log (tail + filter + follow)",
+    )
+    p_audit.add_argument("-n", "--last", type=int, default=20, help="Show the last N entries (default 20; 0 = all)")
+    p_audit.add_argument("-f", "--follow", action="store_true", help="Stream new entries as they're written")
+    p_audit.add_argument("--decision", choices=["allow", "deny"], help="Filter by final decision")
+    p_audit.add_argument(
+        "--source",
+        choices=["auto_allow", "stick", "timeout", "defer", "ble_disconnected"],
+        help="Filter by decision source",
+    )
+    p_audit.add_argument("--tool", help="Filter by tool name (Bash, Edit, ...)")
+    p_audit.add_argument("--ascii", action="store_true", help="ASCII-only output (no colour)")
+    p_audit.add_argument("--path", action="store_true", help="Print the audit log path and exit")
 
     args = parser.parse_args(argv)
     if args.cmd is None:
@@ -88,6 +105,20 @@ def main(argv: list[str] | None = None) -> int:
         return _run_unpair()
     if args.cmd == "push-character":
         return _run_push_character(args.path)
+    if args.cmd == "audit":
+        from .audit import default_path, render
+
+        if args.path:
+            print(default_path())
+            return 0
+        return render(
+            last=args.last,
+            decision=args.decision,
+            source=args.source,
+            tool=args.tool,
+            ascii_only=args.ascii,
+            follow=args.follow,
+        )
 
     return 1
 

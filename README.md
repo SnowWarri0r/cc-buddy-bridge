@@ -84,10 +84,10 @@ To remove the hooks:
 
 ### Auto-start on login
 
-#### macOS
-
 Instead of running `cc-buddy-bridge daemon` manually, install it as a
-user-level launchd agent so it starts at login and restarts on crashes:
+system service so it starts at login and restarts on crashes.
+
+#### macOS (launchd)
 
 ```bash
 .venv/bin/cc-buddy-bridge install --service
@@ -122,9 +122,38 @@ To remove it:
 For a full end-to-end Windows acceptance pass, see
 [`docs/windows-11-manual-validation.md`](docs/windows-11-manual-validation.md).
 
-Linux (systemd user unit) is tracked in
-[issue #4](https://github.com/SnowWarri0r/cc-buddy-bridge/issues/4); help
-wanted.
+#### Linux (systemd)
+
+The same `--service` flag installs a user-level systemd unit on Linux:
+
+```bash
+.venv/bin/cc-buddy-bridge install --service
+```
+
+This writes `~/.config/systemd/user/cc-buddy-bridge.service` pointed at the
+venv Python you just installed from, then runs `systemctl --user
+daemon-reload` and `systemctl --user enable --now cc-buddy-bridge.service`
+so the daemon starts immediately and on every login. View logs with:
+
+```bash
+journalctl --user -u cc-buddy-bridge.service -f
+```
+
+To remove it:
+
+```bash
+.venv/bin/cc-buddy-bridge uninstall --service
+```
+
+A few Linux-specific gotchas:
+
+* **BLE needs BlueZ.** Make sure the `bluetooth` service is running
+  (`systemctl status bluetooth`) and your user is in the `bluetooth`
+  group (`sudo usermod -aG bluetooth $USER`, then log out and back in).
+* **Survive logout / start at boot.** The user manager exits with your
+  last session by default, which stops the daemon. Run
+  `loginctl enable-linger $USER` once if you want the unit to start at
+  boot and persist after logout.
 
 ### Show the stick's state in Claude Code's status line
 

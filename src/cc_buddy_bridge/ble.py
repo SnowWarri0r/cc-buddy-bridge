@@ -19,9 +19,9 @@ from bleak import BleakClient, BleakScanner
 from bleak.backends.device import BLEDevice
 
 from .protocol import (
-    LineAssembler,
     NUS_RX_UUID,
     NUS_TX_UUID,
+    LineAssembler,
     encode,
 )
 

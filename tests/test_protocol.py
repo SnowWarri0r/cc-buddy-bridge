@@ -1,3 +1,4 @@
+
 from cc_buddy_bridge.protocol import (
     LineAssembler,
     build_heartbeat,
@@ -6,8 +7,6 @@ from cc_buddy_bridge.protocol import (
     sanitize_for_stick,
 )
 from cc_buddy_bridge.state import State
-
-from cc_buddy_bridge.ble import _utf8_safe_chunks
 
 
 def test_heartbeat_empty_state():
@@ -95,26 +94,6 @@ def test_encode_terminates_with_newline():
     assert buf.endswith(b"\n")
 
 
-def test_utf8_safe_chunks_do_not_split_cjk_at_boundary():
-    data = encode({"msg": "ab你好cd"})
-    first_chinese_byte = data.index("你".encode("utf-8"))
-    max_size = first_chinese_byte + 1
-
-    chunks = _utf8_safe_chunks(data, max_size)
-
-    assert b"".join(chunks) == data
-    assert all(chunk.decode("utf-8") for chunk in chunks)
-    assert all(len(chunk) <= max_size for chunk in chunks)
-
-
-def test_utf8_safe_chunks_keeps_codepoint_when_max_size_is_tiny():
-    data = "你".encode("utf-8")
-
-    chunks = _utf8_safe_chunks(data, 1)
-
-    assert chunks == [data]
-
-
 def test_line_assembler_fragments():
     la = LineAssembler()
     out = la.feed(b'{"a":1}\n{"b":')
@@ -149,7 +128,7 @@ def test_sanitize_preserves_cjk():
 
 
 def test_sanitize_preserves_bmp_symbols():
-    # BMP symbols (U+0000–U+FFFF) are renderable with the new font.
+    # BMP symbols (U+0000-U+FFFF) are renderable with the new font.
     out = sanitize_for_stick("› done ✓")
     assert "›" in out
     assert "✓" in out

@@ -32,8 +32,15 @@ HOOK_DEFS: list[tuple[str, str, str | None, bool]] = [
 
 def _python_executable() -> str:
     """Prefer the Python that was used to install this package (keeps things working
-    when invoked via `cc-buddy-bridge install` from a venv)."""
-    return sys.executable
+    when invoked via `cc-buddy-bridge install` from a venv).
+
+    On Windows, convert backslashes to forward slashes for bash compatibility.
+    """
+    exe = sys.executable
+    if sys.platform == "win32":
+        # Convert Windows path to POSIX-style for bash
+        exe = exe.replace("\\", "/")
+    return exe
 
 
 def _hook_command(module: str) -> str:
@@ -86,14 +93,12 @@ def install_hooks() -> int:
         cmd = _hook_command(module)
 
         # Find or create the matcher group.
-        existing_group = _find_matcher_group(entries, matcher)
-        if existing_group is None:
-            group: dict[str, Any] = {"hooks": []}
+        group = _find_matcher_group(entries, matcher)
+        if group is None:
+            group = {"hooks": []}
             if matcher is not None:
                 group["matcher"] = matcher
             entries.append(group)
-        else:
-            group = existing_group
 
         inner = group.setdefault("hooks", [])
         # Skip if an identical cc-buddy-bridge entry already exists.
@@ -189,30 +194,22 @@ def show_status() -> int:
         if not any_installed:
             print("  no cc-buddy-bridge hooks installed")
 
-    print("\nService:")
-    try:
-        from . import service
-    except ImportError:
-        print("  (service module unavailable)")
-        return 0
-    if not service.is_supported():
-        print("  unsupported on this platform")
-        return 0
-    print(f"  backend: {service.service_kind()}")
-    if not service.is_installed():
+    from . import service
+    backend = service.backend_name()
+    header = f"Service ({backend}):" if backend else "Service:"
+    print(f"\n{header}")
+    if backend is None:
+        print(f"  unsupported platform ({sys.platform})")
+    elif not service.is_installed():
         print("  not installed (run `cc-buddy-bridge install --service` to add)")
     else:
-        summary = service.status_summary()
-        location = service.definition_location()
-        if location is None:
-            print(f"  {summary}")
-        else:
-            print(f"  {summary}: {location}")
+        loaded = "loaded" if service.is_loaded() else "installed but not loaded"
+        print(f"  {loaded}: {service.unit_path()}")
         print(f"  logs: {service.log_path()}")
     return 0
 
 
-def _find_matcher_group(entries: list[Any], matcher: str | None) -> dict[str, Any] | None:
+def _find_matcher_group(entries: list, matcher: str | None) -> dict | None:
     for e in entries:
         if not isinstance(e, dict):
             continue

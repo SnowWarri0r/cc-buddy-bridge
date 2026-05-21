@@ -44,6 +44,15 @@ def _battery_color(pct: int) -> str:
     return _ANSI_GREEN
 
 
+def _format_tokens(n: int) -> str:
+    """Compact human-readable token count. Caps at one decimal for readability."""
+    if n < 1_000:
+        return str(n)
+    if n < 1_000_000:
+        return f"{n / 1_000:.1f}K" if n < 100_000 else f"{n // 1_000}K"
+    return f"{n / 1_000_000:.1f}M"
+
+
 def _battery_segment(pct: Optional[int], *, ascii_only: bool) -> Optional[str]:
     if not isinstance(pct, int):
         return None
@@ -74,7 +83,7 @@ def _query_state(spec: str, timeout: float = 0.5) -> Optional[dict[str, Any]]:
             buf.extend(chunk)
             if b"\n" in buf:
                 break
-    except (OSError, socket.timeout):
+    except (OSError, socket.timeout, ValueError):
         return None
     finally:
         if s is not None:
@@ -130,6 +139,13 @@ def format_line(state: Optional[dict[str, Any]], *, ascii_only: bool = False) ->
     elif sec is False:
         parts.append("UNSEC" if ascii_only else "⚠UNSEC")
     # sec=None (no status ack yet) → omit
+
+    tokens_today = state.get("tokens_today")
+    if isinstance(tokens_today, int) and tokens_today >= 1_000:
+        parts.append(_format_tokens(tokens_today))
+    cost_today = state.get("cost_today")
+    if isinstance(cost_today, (int, float)) and cost_today >= 0.01:
+        parts.append(f"${cost_today:.2f}")
 
     # Session activity (only if > 0)
     running = state.get("running") or 0

@@ -28,6 +28,14 @@ TOML shape::
     # rules. Default false (your lists extend the built-ins).
     replace_defaults = false
 
+    # If true, the stick is the *sole* approval surface: any Bash command not
+    # matching auto_allow routes to the stick for a button press, even ones
+    # the matcher has never seen. Pair this with Claude Code's
+    # `defaultMode: bypassPermissions` to put physical 2FA in front of every
+    # un-vetted command without any terminal prompts in between. Default false
+    # (matcher's "default" class falls through to Claude Code's native flow).
+    strict = false
+
 Classification precedence: **always_ask beats auto_allow** when both match
 (the author of a config who explicitly asks for confirmation on `rm` shouldn't
 be silently overridden by a loose `auto_allow` pattern like `^r.+`).
@@ -163,6 +171,9 @@ DEFAULT_ALWAYS_ASK: tuple[str, ...] = (
 class MatcherConfig:
     auto_allow: tuple[re.Pattern[str], ...] = field(default_factory=tuple)
     always_ask: tuple[re.Pattern[str], ...] = field(default_factory=tuple)
+    # Strict mode: unmatched commands route to the stick instead of falling
+    # through to Claude Code's native flow. See module docstring.
+    strict: bool = False
 
 
 def _config_path() -> Path:
@@ -190,6 +201,7 @@ def load_config(path: Path | None = None) -> MatcherConfig:
 
     auto_allow_patterns: list[str] = list(DEFAULT_AUTO_ALLOW)
     always_ask_patterns: list[str] = list(DEFAULT_ALWAYS_ASK)
+    strict = False
 
     if target.exists():
         try:
@@ -198,11 +210,16 @@ def load_config(path: Path | None = None) -> MatcherConfig:
                 data = tomllib.load(f)
         except Exception as e:  # noqa: BLE001
             log.warning("matchers: failed to parse %s (%s); using defaults", target, e)
-            return MatcherConfig(auto_allow=_compile(auto_allow_patterns), always_ask=_compile(always_ask_patterns))
+            return MatcherConfig(
+                auto_allow=_compile(auto_allow_patterns),
+                always_ask=_compile(always_ask_patterns),
+                strict=strict,
+            )
 
         user_auto_allow = data.get("auto_allow") or []
         user_always_ask = data.get("always_ask") or []
         replace = bool(data.get("replace_defaults", False))
+        strict = bool(data.get("strict", False))
 
         if replace:
             auto_allow_patterns = list(user_auto_allow)
@@ -214,6 +231,7 @@ def load_config(path: Path | None = None) -> MatcherConfig:
     return MatcherConfig(
         auto_allow=_compile(auto_allow_patterns),
         always_ask=_compile(always_ask_patterns),
+        strict=strict,
     )
 
 
@@ -221,14 +239,16 @@ def classify_command(command: str, cfg: MatcherConfig) -> Decision:
     """Returns "allow" | "ask" | "default".
 
     always_ask beats auto_allow when both match, so a loose allow pattern can't
-    accidentally silence a deliberate ask pattern.
+    accidentally silence a deliberate ask pattern. Under ``cfg.strict``, an
+    otherwise-unmatched command becomes "ask" instead of "default" so the
+    stick is the sole approval surface.
     """
     if not command:
-        return "default"
+        return "ask" if cfg.strict else "default"
     for pat in cfg.always_ask:
         if pat.search(command):
             return "ask"
     for pat in cfg.auto_allow:
         if pat.search(command):
             return "allow"
-    return "default"
+    return "ask" if cfg.strict else "default"
