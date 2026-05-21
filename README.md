@@ -27,7 +27,7 @@ you approve or deny right from the stick's buttons.
 - **Statusline** — `cc-buddy-bridge hud` renders battery / encryption / **tokens today** / **estimated USD spend today** / pending prompts in your prompt bar; composes with [claude-hud](https://github.com/jarrodwatts/claude-hud).
 - **One-command install + autostart** — `cc-buddy-bridge install --service` picks the right backend per OS: launchd (macOS), systemd user unit (Linux), Task Scheduler (Windows).
 - **Custom GIF characters** — `cc-buddy-bridge push-character ./pack/` uploads a folder of frames over BLE with chunked flow control.
-- **Release notifications** — daemon pings GitHub releases once a day; hud renders `↑ vX.Y.Z` when a newer tag exists. `cc-buddy-bridge check-update` for a one-off check. Opt out with `CC_BUDDY_BRIDGE_NO_UPDATE_CHECK=1`.
+- **Release notifications + self-update** — daemon pings GitHub releases once a day; hud renders `↑ vX.Y.Z` when a newer tag exists. `cc-buddy-bridge check-update` for a one-off check, `cc-buddy-bridge update` to actually pull + reinstall + restart the daemon. Opt out of polling with `CC_BUDDY_BRIDGE_NO_UPDATE_CHECK=1`.
 
 ## How it works
 
@@ -345,7 +345,29 @@ cc-buddy-bridge check-update
 
 Exit code is `1` when an update is available, `0` otherwise — handy in scripts.
 
-Privacy: one HTTPS request per day to api.github.com. Disable entirely:
+### Applying the update
+
+```bash
+cc-buddy-bridge update            # prompts y/N, then does the thing
+cc-buddy-bridge update -y         # skip the prompt (CI / scripts)
+```
+
+Equivalent to `git pull && pip install -e .` from the repo root, followed by
+a service restart through whatever backend you installed (launchd / systemd
+user unit / Task Scheduler). Bails early and loudly on:
+
+- not running from a git checkout (e.g. you installed from a wheel) — fall
+  back to your package manager
+- uncommitted local changes — stash or commit first; we will not lose your work
+- non-tty without `-y` — refuse to prompt blindly into the void
+
+If the service backend isn't installed (you're running `cc-buddy-bridge
+daemon` manually), the install step still runs and you'll get a "restart
+the daemon yourself" reminder.
+
+### Privacy
+
+One HTTPS request per day to api.github.com. Disable entirely:
 
 ```bash
 export CC_BUDDY_BRIDGE_NO_UPDATE_CHECK=1

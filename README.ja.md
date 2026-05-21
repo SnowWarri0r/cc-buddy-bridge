@@ -26,7 +26,7 @@ buddy ファームウェアは公式には Claude for macOS/Windows のデスク
 - **ステータスライン** —— `cc-buddy-bridge hud` がプロンプトバーにバッテリー / 暗号化状態 / **当日のトークン数** / **当日の USD 推定コスト** / 保留中の権限プロンプトを表示します。[claude-hud](https://github.com/jarrodwatts/claude-hud) と並べて使うことも可能。
 - **ワンコマンドのインストール + 自動起動** —— `cc-buddy-bridge install --service` が OS ごとに正しいバックエンドを選びます（macOS は launchd、Linux は systemd ユーザーユニット、Windows はタスクスケジューラ）。
 - **カスタム GIF キャラクター** —— `cc-buddy-bridge push-character ./pack/` でフレームの入ったフォルダを BLE 経由でアップロードします。チャンク化されたフロー制御つき。
-- **新バージョン通知** —— デーモンが GitHub releases を 1 日 1 回バックグラウンドで取得し、新タグがあれば hud に `↑ vX.Y.Z` を表示。`cc-buddy-bridge check-update` で明示チェック。環境変数 `CC_BUDDY_BRIDGE_NO_UPDATE_CHECK=1` で無効化可能。
+- **新バージョン通知 + 自動更新** —— デーモンが GitHub releases を 1 日 1 回バックグラウンドで取得し、新タグがあれば hud に `↑ vX.Y.Z` を表示。`cc-buddy-bridge check-update` で明示チェック、`cc-buddy-bridge update` で pull + 再インストール + デーモン再起動まで一気に実行。ポーリング無効化は `CC_BUDDY_BRIDGE_NO_UPDATE_CHECK=1`。
 
 ## 仕組み
 
@@ -326,7 +326,29 @@ cc-buddy-bridge check-update
 
 新バージョンがあれば終了コード `1`、なければ `0`。スクリプトで利用可能。
 
-プライバシー：1 日 1 回 api.github.com に HTTPS リクエスト。完全に無効化：
+### 自動アップグレード
+
+```bash
+cc-buddy-bridge update            # y/N プロンプト後に実行
+cc-buddy-bridge update -y         # プロンプト省略（CI / スクリプト向け）
+```
+
+リポジトリルートで `git pull && pip install -e .` を走らせ、続けてあなたが
+インストールしたサービスバックエンド（launchd / systemd user unit /
+Task Scheduler）でデーモンを再起動します。以下の場合は早期に安全に中止：
+
+- git checkout でない（wheel 経由のインストール）—— pip での更新を促す
+- 未コミットのローカル変更あり —— stash か commit を求める。作業を失う
+  ことはありません
+- tty でなく `-y` も無い —— 盲目的なプロンプトを拒否
+
+サービスがインストールされていない場合（`cc-buddy-bridge daemon` を手動で
+起動している）でもインストール自体は走り、最後に「デーモンを自分で再起動
+してください」と案内します。
+
+### プライバシー
+
+1 日 1 回 api.github.com に HTTPS リクエスト。完全に無効化：
 
 ```bash
 export CC_BUDDY_BRIDGE_NO_UPDATE_CHECK=1
