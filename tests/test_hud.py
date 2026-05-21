@@ -137,6 +137,36 @@ def test_format_tokens_hidden_below_1k():
     assert "850" not in out
 
 
+def test_format_update_segment_appears_at_end():
+    state = {
+        "ble_connected": True, "sec": True, "battery_pct": 80,
+        "update_available": "v0.1.1",
+    }
+    out = format_line(state)
+    assert "↑ v0.1.1" in out
+    # New segment renders at the end of the line.
+    assert out.rstrip().endswith("v0.1.1\x1b[0m") or out.rstrip().endswith("v0.1.1")
+
+
+def test_format_update_segment_ascii():
+    state = {
+        "ble_connected": True, "sec": True, "battery_pct": 80,
+        "update_available": "v0.1.1",
+    }
+    out = format_line(state, ascii_only=True)
+    assert "up v0.1.1" in out
+    assert "\x1b[" not in out
+
+
+def test_format_no_update_omits_segment():
+    state = {
+        "ble_connected": True, "sec": True, "battery_pct": 80,
+        "update_available": None,
+    }
+    out = format_line(state)
+    assert "↑" not in out
+
+
 def test_format_tokens_and_cost_appear_together():
     state = {
         "ble_connected": True, "sec": True, "battery_pct": 80,

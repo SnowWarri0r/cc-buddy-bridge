@@ -161,6 +161,15 @@ def format_line(state: Optional[dict[str, Any]], *, ascii_only: bool = False) ->
     if running:
         parts.append(f"{running}run")
 
+    # New-release nudge — sits at the end so it doesn't push more important
+    # state off-screen. Yellow to catch the eye without screaming.
+    update = state.get("update_available")
+    if isinstance(update, str) and update:
+        if ascii_only:
+            parts.append(f"up {update}")
+        else:
+            parts.append(f"{_ANSI_YELLOW}↑ {update}{_ANSI_RESET}")
+
     if ascii_only:
         return "buddy: " + " ".join(parts) if parts else "buddy: ok"
     return "🐾 " + " ".join(parts) if parts else "🐾 ok"

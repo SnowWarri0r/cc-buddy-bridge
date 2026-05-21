@@ -25,6 +25,7 @@ buddy 固件官方只跟 Claude for macOS/Windows 桌面端配对。本项目让
 - **状态栏组件** —— `cc-buddy-bridge hud` 在终端 prompt 渲染电量 / 加密状态 / **当日 token 数** / **当日预估 USD 花销** / 待处理权限提示；可与 [claude-hud](https://github.com/jarrodwatts/claude-hud) 组合使用。
 - **一行命令安装 + 开机自启** —— `cc-buddy-bridge install --service` 自动选对每个 OS 的后端：macOS 用 launchd、Linux 用 systemd 用户级 unit、Windows 用任务计划程序。
 - **自定义 GIF 角色** —— `cc-buddy-bridge push-character ./pack/` 通过 BLE 上传一整个动画包，自带分块流控。
+- **新版本提示** —— daemon 每天后台轮询一次 GitHub releases；有新版时 hud 多一段 `↑ vX.Y.Z`。`cc-buddy-bridge check-update` 显式触发；环境变量 `CC_BUDDY_BRIDGE_NO_UPDATE_CHECK=1` 关闭。
 
 ## 工作原理
 
@@ -286,6 +287,44 @@ jq 'select(.decision=="deny")' ~/Library/Logs/cc-buddy-bridge-audit.jsonl
 jq -r 'select(.source=="auto_allow") | .hint' ~/Library/Logs/cc-buddy-bridge-audit.jsonl \
   | awk '{print $1}' | sort | uniq -c | sort -rn | head
 ```
+
+## 新版本提示
+
+daemon 每天后台轮询一次
+`https://api.github.com/repos/SnowWarri0r/cc-buddy-bridge/releases/latest`，
+缓存结果并在两个地方提示：
+
+* 启动 daemon log 里写一行（有新版时）
+* `cc-buddy-bridge hud` 在 statusline 末尾追加 `↑ vX.Y.Z`（`--ascii` 模式
+  下是 `up vX.Y.Z`），黄色低调，不会挤掉电量/花销等重要段
+
+显式查询：
+
+```bash
+cc-buddy-bridge check-update
+# Installed:   0.1.0
+# Latest:      v0.1.2
+#
+# Update available: 0.1.0 → v0.1.2
+# Pull with:        git pull && pip install -e .
+# Then restart:     cc-buddy-bridge install --service  (or kickstart the daemon)
+```
+
+有新版时退出码为 `1`，否则 `0`——便于脚本检测。
+
+隐私层面：每天一次 HTTPS 请求到 api.github.com。完全关掉：
+
+```bash
+export CC_BUDDY_BRIDGE_NO_UPDATE_CHECK=1
+```
+
+缓存路径：macOS 在 `~/Library/Caches/cc-buddy-bridge/update_check.json`、
+Linux 在 `$XDG_CACHE_HOME/cc-buddy-bridge/...`、
+Windows 在 `%LOCALAPPDATA%\cc-buddy-bridge\update_check.json`。
+
+固件版本检测暂不在范围内——stick 的 status ack 不带固件版本字段，
+上游 [anthropics/claude-desktop-buddy](https://github.com/anthropics/claude-desktop-buddy)
+也没有 release / tag 可对比。
 
 ## 系统要求
 
