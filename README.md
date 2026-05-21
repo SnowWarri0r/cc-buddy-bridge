@@ -27,6 +27,7 @@ you approve or deny right from the stick's buttons.
 - **Statusline** — `cc-buddy-bridge hud` renders battery / encryption / **tokens today** / **estimated USD spend today** / pending prompts in your prompt bar; composes with [claude-hud](https://github.com/jarrodwatts/claude-hud).
 - **One-command install + autostart** — `cc-buddy-bridge install --service` picks the right backend per OS: launchd (macOS), systemd user unit (Linux), Task Scheduler (Windows).
 - **Custom GIF characters** — `cc-buddy-bridge push-character ./pack/` uploads a folder of frames over BLE with chunked flow control.
+- **Release notifications** — daemon pings GitHub releases once a day; hud renders `↑ vX.Y.Z` when a newer tag exists. `cc-buddy-bridge check-update` for a one-off check. Opt out with `CC_BUDDY_BRIDGE_NO_UPDATE_CHECK=1`.
 
 ## How it works
 
@@ -318,6 +319,46 @@ jq 'select(.decision=="deny")' ~/Library/Logs/cc-buddy-bridge-audit.jsonl
 jq -r 'select(.source=="auto_allow") | .hint' ~/Library/Logs/cc-buddy-bridge-audit.jsonl \
   | awk '{print $1}' | sort | uniq -c | sort -rn | head
 ```
+
+## Update notifications
+
+The daemon polls `https://api.github.com/repos/SnowWarri0r/cc-buddy-bridge/releases/latest`
+once a day in the background, caches the result, and surfaces a release nudge in
+two places:
+
+* Daemon log at startup if a newer tag exists.
+* `cc-buddy-bridge hud` appends `↑ vX.Y.Z` (or `up vX.Y.Z` in `--ascii`) to the
+  statusline. Yellow, end of the line, so it doesn't push the battery/cost
+  segments off-screen.
+
+One-shot from the CLI:
+
+```bash
+cc-buddy-bridge check-update
+# Installed:   0.1.0
+# Latest:      v0.1.2
+#
+# Update available: 0.1.0 → v0.1.2
+# Pull with:        git pull && pip install -e .
+# Then restart:     cc-buddy-bridge install --service  (or kickstart the daemon)
+```
+
+Exit code is `1` when an update is available, `0` otherwise — handy in scripts.
+
+Privacy: one HTTPS request per day to api.github.com. Disable entirely:
+
+```bash
+export CC_BUDDY_BRIDGE_NO_UPDATE_CHECK=1
+```
+
+Cache lives at `~/Library/Caches/cc-buddy-bridge/update_check.json` on macOS,
+`$XDG_CACHE_HOME/cc-buddy-bridge/...` on Linux, and
+`%LOCALAPPDATA%\cc-buddy-bridge\update_check.json` on Windows.
+
+Firmware update detection is out of scope for now — the stick's status ack
+doesn't carry a firmware version, and upstream
+[anthropics/claude-desktop-buddy](https://github.com/anthropics/claude-desktop-buddy)
+has no releases or tags to compare against.
 
 ## Requirements
 

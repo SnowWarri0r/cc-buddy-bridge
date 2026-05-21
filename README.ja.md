@@ -26,6 +26,7 @@ buddy ファームウェアは公式には Claude for macOS/Windows のデスク
 - **ステータスライン** —— `cc-buddy-bridge hud` がプロンプトバーにバッテリー / 暗号化状態 / **当日のトークン数** / **当日の USD 推定コスト** / 保留中の権限プロンプトを表示します。[claude-hud](https://github.com/jarrodwatts/claude-hud) と並べて使うことも可能。
 - **ワンコマンドのインストール + 自動起動** —— `cc-buddy-bridge install --service` が OS ごとに正しいバックエンドを選びます（macOS は launchd、Linux は systemd ユーザーユニット、Windows はタスクスケジューラ）。
 - **カスタム GIF キャラクター** —— `cc-buddy-bridge push-character ./pack/` でフレームの入ったフォルダを BLE 経由でアップロードします。チャンク化されたフロー制御つき。
+- **新バージョン通知** —— デーモンが GitHub releases を 1 日 1 回バックグラウンドで取得し、新タグがあれば hud に `↑ vX.Y.Z` を表示。`cc-buddy-bridge check-update` で明示チェック。環境変数 `CC_BUDDY_BRIDGE_NO_UPDATE_CHECK=1` で無効化可能。
 
 ## 仕組み
 
@@ -299,6 +300,46 @@ jq 'select(.decision=="deny")' ~/Library/Logs/cc-buddy-bridge-audit.jsonl
 jq -r 'select(.source=="auto_allow") | .hint' ~/Library/Logs/cc-buddy-bridge-audit.jsonl \
   | awk '{print $1}' | sort | uniq -c | sort -rn | head
 ```
+
+## 新バージョン通知
+
+デーモンは毎日 1 回バックグラウンドで
+`https://api.github.com/repos/SnowWarri0r/cc-buddy-bridge/releases/latest`
+を取得し、キャッシュして二箇所で通知します：
+
+* 起動時のデーモンログに 1 行（新バージョンがある場合のみ）
+* `cc-buddy-bridge hud` がステータスライン末尾に `↑ vX.Y.Z`（`--ascii` モードでは
+  `up vX.Y.Z`）を追加。色は黄色で控えめ、バッテリーやコストなど重要な情報を
+  画面外に押し出さないようにしてあります。
+
+明示的にチェック：
+
+```bash
+cc-buddy-bridge check-update
+# Installed:   0.1.0
+# Latest:      v0.1.2
+#
+# Update available: 0.1.0 → v0.1.2
+# Pull with:        git pull && pip install -e .
+# Then restart:     cc-buddy-bridge install --service  (or kickstart the daemon)
+```
+
+新バージョンがあれば終了コード `1`、なければ `0`。スクリプトで利用可能。
+
+プライバシー：1 日 1 回 api.github.com に HTTPS リクエスト。完全に無効化：
+
+```bash
+export CC_BUDDY_BRIDGE_NO_UPDATE_CHECK=1
+```
+
+キャッシュパス：macOS は `~/Library/Caches/cc-buddy-bridge/update_check.json`、
+Linux は `$XDG_CACHE_HOME/cc-buddy-bridge/...`、
+Windows は `%LOCALAPPDATA%\cc-buddy-bridge\update_check.json`。
+
+ファームウェアのバージョン検出は対象外です —— stick の status ack に
+ファームウェアバージョンフィールドがなく、上流
+[anthropics/claude-desktop-buddy](https://github.com/anthropics/claude-desktop-buddy)
+にも比較すべき release / tag がないためです。
 
 ## 動作環境
 

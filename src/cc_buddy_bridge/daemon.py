@@ -20,6 +20,7 @@ from .protocol import (
     build_time_sync,
 )
 from .state import State
+from .version_check import check as version_check
 
 log = logging.getLogger(__name__)
 
@@ -69,6 +70,9 @@ class Daemon:
         # Track last heartbeat to dedupe (avoid spamming BLE with identical snapshots).
         self._last_hb_serialized: Optional[str] = None
         self._last_hb_sent_at: float = 0.0
+        # Latest available version string (e.g. "v0.1.1") when an update is
+        # available; None otherwise. Set by _update_check_loop.
+        self._update_available: Optional[str] = None
         self._shutdown = asyncio.Event()
 
     # ---- entry ----
@@ -83,6 +87,7 @@ class Daemon:
             asyncio.create_task(self._heartbeat_loop(), name="heartbeat"),
             asyncio.create_task(self._on_ble_connected(), name="on-connect"),
             asyncio.create_task(self._status_poller(), name="status-poller"),
+            asyncio.create_task(self._update_check_loop(), name="update-check"),
         ]
         try:
             await self._shutdown.wait()
@@ -158,6 +163,33 @@ class Daemon:
                 pass
             if self.ble.connected:
                 await self.ble.send({"cmd": "status"})
+
+    async def _update_check_loop(self) -> None:
+        """Poll GitHub releases once at startup, then every 24 hours.
+
+        Network calls happen on a thread so the asyncio loop isn't blocked by
+        urllib's sync IO. Failures are logged at DEBUG and we just retry next
+        cycle — never raise, never crash the daemon.
+        """
+        INTERVAL = 24 * 3600
+        # First check is on startup (uses cache if fresh) so the hud has a
+        # value to display immediately.
+        first = True
+        while not self._shutdown.is_set():
+            info = await asyncio.to_thread(version_check, force=not first)
+            self._update_available = info.latest if info.has_update else None
+            if info.has_update and first:
+                log.info(
+                    "update available: %s → %s (you're on the latest cached info; "
+                    "see https://github.com/SnowWarri0r/cc-buddy-bridge/releases)",
+                    info.current, info.latest,
+                )
+            first = False
+            try:
+                await asyncio.wait_for(self._shutdown.wait(), timeout=INTERVAL)
+                return
+            except asyncio.TimeoutError:
+                pass
 
     # ---- IPC handler ----
 
@@ -269,6 +301,7 @@ class Daemon:
                     "tokens_today": self.state.tokens_today,
                     "cost_cumulative": self.state.cost_cumulative,
                     "cost_today": self.state.cost_today,
+                    "update_available": self._update_available,
                     "pending_tool": pending.tool_name if pending else None,
                     "last_entry": self.state.entries[0].text if self.state.entries else "",
                 },
