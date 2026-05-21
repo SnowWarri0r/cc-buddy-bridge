@@ -1,4 +1,4 @@
-
+from cc_buddy_bridge.ble import _utf8_safe_chunks
 from cc_buddy_bridge.protocol import (
     LineAssembler,
     build_heartbeat,
@@ -92,6 +92,32 @@ def test_turn_event_ok():
 def test_encode_terminates_with_newline():
     buf = encode({"a": 1})
     assert buf.endswith(b"\n")
+
+
+def test_utf8_safe_chunks_do_not_split_cjk_at_boundary():
+    """Regression: the BLE write path used to truncate mid-codepoint when the
+    chunk boundary landed inside a multi-byte UTF-8 sequence, which produced
+    garbled CJK on the stick (README quirk #1). _utf8_safe_chunks must back
+    the split off to a codepoint boundary."""
+    data = encode({"msg": "ab你好cd"})
+    first_chinese_byte = data.index("你".encode("utf-8"))
+    max_size = first_chinese_byte + 1
+
+    chunks = _utf8_safe_chunks(data, max_size)
+
+    assert b"".join(chunks) == data
+    assert all(chunk.decode("utf-8") for chunk in chunks)
+    assert all(len(chunk) <= max_size for chunk in chunks)
+
+
+def test_utf8_safe_chunks_keeps_codepoint_when_max_size_is_tiny():
+    """A single CJK codepoint is 3 bytes in UTF-8. If max_size is smaller than
+    one codepoint we must NOT split it — emit it whole even if it overflows."""
+    data = "你".encode("utf-8")
+
+    chunks = _utf8_safe_chunks(data, 1)
+
+    assert chunks == [data]
 
 
 def test_line_assembler_fragments():
