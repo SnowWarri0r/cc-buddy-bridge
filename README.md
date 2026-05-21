@@ -1,8 +1,11 @@
 # cc-buddy-bridge
 
+**English** | [简体中文](README.zh-CN.md) | [日本語](README.ja.md)
+
 [![test](https://github.com/SnowWarri0r/cc-buddy-bridge/actions/workflows/test.yml/badge.svg)](https://github.com/SnowWarri0r/cc-buddy-bridge/actions/workflows/test.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-yellow.svg)](LICENSE)
 [![Python: 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
+[![Platforms](https://img.shields.io/badge/platforms-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey.svg)](#requirements)
 [![Status: daily-driven](https://img.shields.io/badge/status-daily--driven-brightgreen.svg)](#status)
 [![PRs: Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/SnowWarri0r/cc-buddy-bridge/issues)
 
@@ -16,22 +19,29 @@ so your desk pet reacts to CLI sessions: sleeps when idle, gets busy when a
 tool call runs, blinks when a permission prompt needs your attention, and lets
 you approve or deny right from the stick's buttons.
 
+## What you get
+
+- **Physical 2FA for risky tools** — set `defaultMode: bypassPermissions` everywhere except the desk buddy. A/B buttons on the stick decide allow/deny for the few operations you flagged on `permissions.ask`.
+- **Smart matcher** — auto-allow trivial Bash (`ls`/`cat`/`grep`/...), always-ask risky (`rm`/`curl`/`git push`/...), defer the rest to the stick. TOML-overridable.
+- **Live stick HUD** — assistant replies mirror to the stick within ~500 ms via a JSONL tailer (no Stop-hook flush race).
+- **Statusline** — `cc-buddy-bridge hud` renders battery / encryption / **tokens today** / **estimated USD spend today** / pending prompts in your prompt bar; composes with [claude-hud](https://github.com/jarrodwatts/claude-hud).
+- **One-command install + autostart** — `cc-buddy-bridge install --service` picks the right backend per OS: launchd (macOS), systemd user unit (Linux), Task Scheduler (Windows).
+- **Custom GIF characters** — `cc-buddy-bridge push-character ./pack/` uploads a folder of frames over BLE with chunked flow control.
+- **Release notifications** — daemon pings GitHub releases once a day; hud renders `↑ vX.Y.Z` when a newer tag exists. `cc-buddy-bridge check-update` for a one-off check. Opt out with `CC_BUDDY_BRIDGE_NO_UPDATE_CHECK=1`.
+
 ## How it works
 
 ```
-claude CLI ──PreToolUse/Stop/etc hooks──▶ local IPC (Unix socket on POSIX / TCP loopback on Windows)
-                                          │
-                                          └──────────────────────────────▶ daemon ──BLE NUS──▶ stick
-                                                                             ▲
-                                                                             └── tails ~/.claude/projects/*.jsonl
-                                                                                 for tokens & recent messages
+claude CLI ──PreToolUse/Stop/etc hooks──▶ Unix socket ──▶ daemon ──BLE NUS──▶ stick
+                                                           ▲
+                                                           └── tails ~/.claude/projects/*.jsonl
+                                                               for tokens & recent messages
 ```
 
 * **Hooks** (configured in `~/.claude/settings.json`) fire on session lifecycle
   events, tool calls, permission requests, and turn boundaries.
 * Each hook is a small Python script that posts the event payload to a local
-  **daemon** over platform-native IPC: a Unix socket on macOS/Linux, TCP
-  loopback (`127.0.0.1:48765` by default) on Windows.
+  **daemon** over a Unix socket.
 * The daemon aggregates per-session state (`total` / `running` / `waiting` /
   `tokens` / `entries`) and pushes heartbeat snapshots to the stick over BLE
   Nordic UART Service, speaking the same JSON wire format as the desktop app.
@@ -42,8 +52,6 @@ See [REFERENCE.md in the buddy firmware repo](https://github.com/anthropics/clau
 for the full wire protocol.
 
 ## Install
-
-#### macOS / Linux
 
 ```bash
 git clone https://github.com/SnowWarri0r/cc-buddy-bridge
@@ -58,20 +66,7 @@ python3.12 -m venv .venv
 .venv/bin/cc-buddy-bridge daemon
 ```
 
-#### Windows (PowerShell)
-
-```powershell
-git clone https://github.com/SnowWarri0r/cc-buddy-bridge
-cd cc-buddy-bridge
-py -3.12 -m venv .venv
-.venv\Scripts\pip install -e .
-
-# Register hooks into ~/.claude\settings.json (makes a .backup copy first):
-.venv\Scripts\cc-buddy-bridge install
-
-# In another terminal, start the daemon:
-.venv\Scripts\cc-buddy-bridge daemon
-```
+**Windows users:** Replace `.venv/bin/` with `.venv\Scripts\` in the commands above.
 
 Then start any `claude` session. The daemon scans for a BLE device advertising
 a name starting with `Claude`, connects, and begins pushing state.
@@ -89,27 +84,16 @@ system service so it starts at login and restarts on crashes.
 
 #### macOS (launchd)
 
+Install as a user-level launchd agent:
+
 ```bash
 .venv/bin/cc-buddy-bridge install --service
 ```
 
 This writes `~/Library/LaunchAgents/com.github.cc-buddy-bridge.daemon.plist`
 pointed at the venv Python you just installed from, runs it immediately via
-`launchctl load`, and redirects stdout/stderr to the project log file
-(`./logs/cc-buddy-bridge.log` by default, or `CC_BUDDY_BRIDGE_LOG_DIR`).
-
-#### Windows
-
-Use the same command:
-
-```powershell
-.venv\Scripts\cc-buddy-bridge install --service
-```
-
-This creates a per-user Task Scheduler entry named
-`com.github.cc-buddy-bridge.daemon` that starts at logon and runs the daemon
-with `pythonw.exe` when available. Logs go to the project log file
-(`.\logs\cc-buddy-bridge.log` by default, or `CC_BUDDY_BRIDGE_LOG_DIR`).
+`launchctl load`, and redirects stdout/stderr to
+`~/Library/Logs/cc-buddy-bridge.log`.
 
 To remove it:
 
@@ -117,10 +101,22 @@ To remove it:
 .venv/bin/cc-buddy-bridge uninstall --service
 ```
 
-`cc-buddy-bridge status` reports both hook and service status.
+#### Windows (Task Scheduler)
 
-For a full end-to-end Windows acceptance pass, see
-[`docs/windows-11-manual-validation.md`](docs/windows-11-manual-validation.md).
+Install as a Task Scheduler task:
+
+```bash
+.venv/Scripts/cc-buddy-bridge install --service
+```
+
+This creates a task named `cc-buddy-bridge-daemon` that runs at logon.
+Logs are written to `%LOCALAPPDATA%\cc-buddy-bridge\daemon.log`.
+
+To remove it:
+
+```bash
+.venv/Scripts/cc-buddy-bridge uninstall --service
+```
 
 #### Linux (systemd)
 
@@ -150,10 +146,21 @@ A few Linux-specific gotchas:
 * **BLE needs BlueZ.** Make sure the `bluetooth` service is running
   (`systemctl status bluetooth`) and your user is in the `bluetooth`
   group (`sudo usermod -aG bluetooth $USER`, then log out and back in).
+  Without that, you'll see
+  `org.freedesktop.DBus.Error.ServiceUnknown ... org.bluez` in the
+  journal.
 * **Survive logout / start at boot.** The user manager exits with your
   last session by default, which stops the daemon. Run
   `loginctl enable-linger $USER` once if you want the unit to start at
   boot and persist after logout.
+
+Tested on Ubuntu 22.04 LTS. Should work on any distro with a systemd user
+manager (Fedora 39+, Debian 12+, Arch, etc.) — please open an issue if
+your distro needs a tweak.
+
+---
+
+`cc-buddy-bridge status` reports both hook and service status.
 
 ### Show the stick's state in Claude Code's status line
 
@@ -176,15 +183,182 @@ another statusline plugin? You can compose both — wrap them in a small
 shell script and concatenate outputs; statusLine accepts multi-line
 responses.
 
+Live in iTerm2 — paw print, battery progress bar, encryption lock, running session count:
+
+<p align="center"><img src="docs/img/statusline.png" alt="cc-buddy-bridge hud — paw, full green battery bar, 100%, lock, 1run" width="436"></p>
+
+Other states the same line goes through:
+
+```
+🐾 🔋 96% 🔒                          # healthy, encrypted link
+🐾 🔋 96% 🔒 12.3K $0.42              # tokens (≥ 1K) and cost (≥ $0.01) today
+🐾 🔋 12% 🔒 1.2M $8.50 2run          # low battery, busy day, sessions running
+🐾 ⚠ approve: Bash                    # permission prompt waiting on the stick
+🐾 ∅                                  # stick disconnected (but daemon is alive)
+🐾 off                                # daemon not running
+```
+
+The tokens segment sums today's `usage.output_tokens` across
+`~/.claude/projects/*.jsonl`. The cost segment estimates USD from the
+same records using `input + output + cache writes/reads × per-model
+rates`. Rates table lives in [`pricing.py`](src/cc_buddy_bridge/pricing.py) —
+edit to override or add models. Not a billing source of truth; treat
+as a heads-up.
+
+## Working with Claude Code's `permissions` config
+
+Claude Code's own `~/.claude/settings.json` `permissions` block (`allow` /
+`ask` / `deny` lists, plus `defaultMode`) and this bridge's smart matcher
+*both* decide what happens on a tool call. The interaction is well-defined,
+but worth spelling out so you can pick the right combo.
+
+For every `PreToolUse` event:
+
+```
+matcher classify_command(hint)
+ ├─ "allow"  → bridge returns permissionDecision=allow  (short-circuit)
+ ├─ "ask"    → bridge waits on stick → returns the button's decision
+ └─ "default"→ bridge returns no opinion → Claude Code's settings.json + defaultMode run
+```
+
+**Recommended pairings**
+
+| Claude Code `defaultMode` | Matcher `strict` | Behaviour                                                                                                              |
+| ------------------------- | ---------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `ask` (the default)       | `false`          | Trivial bash auto-approved by matcher; risky bash routes to stick; everything else gets Claude Code's terminal prompt. |
+| `bypassPermissions`       | **`true`**       | **Stick is the sole human-in-the-loop.** Trivial bash auto-approved; everything else (matched OR unmatched) routes to the stick. No terminal prompts. |
+| `bypassPermissions`       | `false`          | ⚠ Only matcher's `always_ask` patterns gate at the stick; everything else silently auto-approves. The daemon logs a warning at startup if it detects this combo. |
+| `auto`                    | `false`          | Same as `ask` for our purposes — unmatched commands fall through to Claude Code's flow.                                |
+
+`strict` lives in `~/.config/cc-buddy-bridge/matchers.toml`:
+
+```toml
+strict = true
+```
+
+The daemon logs a one-line summary of both configs at startup so you can
+spot misalignments quickly:
+
+```
+INFO cc_buddy_bridge.daemon: matcher: strict=False auto_allow=46 always_ask=53
+INFO cc_buddy_bridge.daemon: settings.json: permissions.defaultMode='auto' ask=0
+```
+
+## Audit log
+
+Every `PreToolUse` decision is appended to a JSONL file so you can review
+later what was let through, denied, or deferred — especially valuable
+under `bypassPermissions` where most decisions never reach your eyes.
+
+Default location:
+
+| OS      | Path                                                      |
+| ------- | --------------------------------------------------------- |
+| macOS   | `~/Library/Logs/cc-buddy-bridge-audit.jsonl`              |
+| Linux   | `$XDG_DATA_HOME/cc-buddy-bridge/audit.jsonl` (or `~/.local/share/...`) |
+| Windows | `%LOCALAPPDATA%\cc-buddy-bridge\audit.jsonl`              |
+
+Override with the `CC_BUDDY_BRIDGE_AUDIT` env var.
+
+One line per decision; fields:
+
+```json
+{"ts":"2026-05-16T00:15:12.690+08:00","session":"c461b71c","tool":"Bash",
+ "hint":"git status -s","matcher":"allow","decision":"allow","source":"auto_allow"}
+```
+
+| Field      | Meaning                                                          |
+| ---------- | ---------------------------------------------------------------- |
+| `ts`       | ISO-8601 local timestamp with offset                             |
+| `session`  | First 8 chars of the Claude Code session id                      |
+| `tool`     | Tool name (`Bash`, `Edit`, ...)                                  |
+| `hint`     | Short summary of what's being run (truncated to 200 chars)       |
+| `matcher`  | Matcher classification: `allow` / `ask` / `default`              |
+| `decision` | What the bridge returned: `allow` / `deny` / `null` (deferred)   |
+| `source`   | `auto_allow` / `stick` / `timeout` / `defer` / `ble_disconnected`|
+| `elapsed_s`| Round-trip seconds (only present when the stick was involved)    |
+
+### Viewing
+
+`cc-buddy-bridge audit` is the friendly viewer — coloured, aligned, with
+tail / filter / follow:
+
+```bash
+cc-buddy-bridge audit                       # last 20 entries
+cc-buddy-bridge audit -n 100                # last 100
+cc-buddy-bridge audit -f                    # follow new entries (Ctrl+C to stop)
+cc-buddy-bridge audit --decision deny       # only the things you blocked
+cc-buddy-bridge audit --source stick        # only stick-decided rounds
+cc-buddy-bridge audit --tool Edit -n 50     # last 50 Edit calls
+cc-buddy-bridge audit --path                # print the file path and exit
+cc-buddy-bridge audit --ascii               # no colour (pipes / dumb terminals)
+```
+
 Sample output:
 
 ```
-🐾 🔋 96% 🔒              # healthy, encrypted link
-🐾 🔋 12% 🔒 2run         # low battery, sessions running
-🐾 ⚠ approve: Bash        # permission prompt waiting on the stick
-🐾 ∅                      # stick disconnected (but daemon is alive)
-🐾 off                    # daemon not running
+# audit log: /Users/snow/Library/Logs/cc-buddy-bridge-audit.jsonl
+00:21:09.029 Bash     —     defer       sleep 8 && gh run list --repo ...
+00:30:10.212 Bash     allow auto_allow  cat >> tests/test_audit.py <<'EOF' ...
+00:34:55.871 Bash     deny  stick       git push origin main --force
 ```
+
+Colours: green for `allow`, red for `deny`, dim for `—` (no decision /
+deferred). Source column is yellow for `stick` (a human pressed a button),
+red for `timeout`, dim otherwise.
+
+### Raw jq recipes
+
+If you prefer jq:
+
+```bash
+# "What did I deny on the stick today?"
+jq 'select(.decision=="deny")' ~/Library/Logs/cc-buddy-bridge-audit.jsonl
+
+# "Top auto-allowed commands this week"
+jq -r 'select(.source=="auto_allow") | .hint' ~/Library/Logs/cc-buddy-bridge-audit.jsonl \
+  | awk '{print $1}' | sort | uniq -c | sort -rn | head
+```
+
+## Update notifications
+
+The daemon polls `https://api.github.com/repos/SnowWarri0r/cc-buddy-bridge/releases/latest`
+once a day in the background, caches the result, and surfaces a release nudge in
+two places:
+
+* Daemon log at startup if a newer tag exists.
+* `cc-buddy-bridge hud` appends `↑ vX.Y.Z` (or `up vX.Y.Z` in `--ascii`) to the
+  statusline. Yellow, end of the line, so it doesn't push the battery/cost
+  segments off-screen.
+
+One-shot from the CLI:
+
+```bash
+cc-buddy-bridge check-update
+# Installed:   0.1.0
+# Latest:      v0.1.2
+#
+# Update available: 0.1.0 → v0.1.2
+# Pull with:        git pull && pip install -e .
+# Then restart:     cc-buddy-bridge install --service  (or kickstart the daemon)
+```
+
+Exit code is `1` when an update is available, `0` otherwise — handy in scripts.
+
+Privacy: one HTTPS request per day to api.github.com. Disable entirely:
+
+```bash
+export CC_BUDDY_BRIDGE_NO_UPDATE_CHECK=1
+```
+
+Cache lives at `~/Library/Caches/cc-buddy-bridge/update_check.json` on macOS,
+`$XDG_CACHE_HOME/cc-buddy-bridge/...` on Linux, and
+`%LOCALAPPDATA%\cc-buddy-bridge\update_check.json` on Windows.
+
+Firmware update detection is out of scope for now — the stick's status ack
+doesn't carry a firmware version, and upstream
+[anthropics/claude-desktop-buddy](https://github.com/anthropics/claude-desktop-buddy)
+has no releases or tags to compare against.
 
 ## Requirements
 
@@ -211,26 +385,40 @@ The reference firmware has several sharp edges the wire protocol doesn't
 warn you about. Documenting them here so you don't re-debug them, and so
 the workarounds baked into this codebase have a visible rationale.
 
-### 1. CJK and multi-byte UTF-8 on the BLE link
+### 1. Multi-byte UTF-8 strands get truncated mid-character on the BLE link
 
-The firmware now ships a CJK-capable bitmap font. All BMP characters
-(U+0000–U+FFFF) — including CJK unified ideographs, fullwidth
-punctuation, and kana — render correctly. Supplementary-plane
-codepoints (U+10000+, i.e. most emoji) and lone surrogates are still
-outside the font table and would cause an out-of-range index fault.
+A heartbeat carrying CJK (or any UTF-8 multi-byte content) can easily
+exceed the default 20-byte ATT Write-Without-Response payload (`MTU − 3`
+bytes per packet). [`bleak`](https://github.com/hbldh/bleak)'s
+`write_gatt_char()` does not auto-chunk write-without-response — the
+overflow is silently dropped. The firmware then sees a JSON message
+ending mid-UTF-8 sequence (e.g. a trailing `0xE4` with the two
+continuation bytes gone). ArduinoJson rejects the malformed JSON;
+TFT_eSPI's `decodeUTF8()` state machine gets stuck waiting for the
+continuation bytes that never arrive, corrupting subsequent reads. The
+render or BLE task wedges and the link visibly resets ~1 s later.
 
-**Workaround — sanitization:** `sanitize_for_stick()` in `protocol.py`
-replaces non-BMP codepoints (emoji, etc.), lone surrogates
-(U+D800–U+DFFF), and C0/C1 control characters with `?`. BMP content,
-including Chinese, is passed through unchanged.
+**Two earlier misdiagnoses we ate, so you don't have to:**
 
-**Workaround — BLE chunking:** BLE Write Without Response payloads are
-capped at `MTU − 3` bytes. A heartbeat with several CJK entries can
-exceed the default 20-byte ATT payload, and a naive single write
-silently truncates the data — splitting a 3-byte UTF-8 sequence mid-
-character and producing garbled glyphs. `BuddyBLE.send()` now chunks
-the encoded JSON into `MTU − 3` byte slices before writing, so no
-multi-byte sequence ever straddles a packet boundary.
+- We first blamed the firmware's ASCII-only 5×7 GFX bitmap font
+  (`96740fd`). That would have been right *if* whole CJK byte
+  sequences ever reached the firmware — but they didn't.
+- We then noticed the `M5StickCPlus` library ships an unused 1.7 MB
+  HZK16 GB2312 font with a `loadHzk16(InternalHzk16)` API (`2099de1`).
+  True but moot — the corrupted bytes never reach the font lookup
+  either way.
+
+The real root cause was diagnosed by
+[@omengye](https://github.com/omengye) in their fork; full credit there.
+
+**Current workaround:** `sanitize_for_stick()` in `protocol.py` still
+rewrites everything outside `0x20`–`0x7E` (and tab) to `?`. Lossy and
+overly conservative relative to the real fix, but stable.
+
+**Pending proper fix** (tracked in [#12](https://github.com/SnowWarri0r/cc-buddy-bridge/issues/12)):
+chunk `BuddyBLE.send()` writes at `mtu_size − 3`, relax the sanitizer
+to pass all BMP codepoints through, and strip only supplementary-plane
+(most emoji), surrogates, and control chars.
 
 ### 2. `entries` wire order is oldest-first, not newest-first
 
@@ -307,32 +495,81 @@ a fresh 6-digit passkey pairing.
 
 ## Status
 
-Daily-driver complete. The author runs it on every Claude Code session.
+Daily-driver complete — the author runs it on every Claude Code session.
 
-**Core protocol**
+**Battle-tested infra**
 
-* Heartbeat — sessions / tokens / entries / pending prompt
-* Permission round-trip — stick A/B buttons decide; signed back into Claude Code
-* Folder push — upload GIF character packs over BLE with flow control
-* Fresh BLE pairing — MITM + bonding + DisplayOnly passkey, end-to-end tested
+* Fresh BLE pairing — MITM + bonding + DisplayOnly passkey, end-to-end
+* Reconnection — exponential backoff + multi-daemon guard (refuse to start if another instance owns the socket)
+* Folder push — chunked flow control, 1.8 MB pack cap, per-chunk acks
+* Stick status polling — battery / encryption / fs free every 60 s
+* Logging — rotating file, per-component levels, structured permission round-trip traces
 
-**Workflow**
+**Tests + CI**
 
-* Smart matcher — auto-allow trivial Bash (`ls`/`cat`/`grep`/...), always-ask risky (`rm`/`curl`/`git push`/...), defer the rest
-* Live assistant text — JSONL tailer fires entry-emit within ~500 ms of the message hitting disk; no Stop-hook lag
-* Turn-end notification — macOS Notification Center banner + Glass sound, Windows system chime, plus stick `celebrate` animation
-* Status-line `hud` subcommand — emoji bar with battery progress, encryption, pending prompts; composes alongside claude-hud
-
-**Operations**
-
-* macOS launchd / Windows Task Scheduler service — auto-start on login
-* Stick status polling — battery %, link encryption, fs free
-* Exponential reconnect backoff + multi-daemon guard + resilient logging
+* 98 unit tests covering state, protocol, installer, hud, matchers, JSONL tailer, folder push, service backends
+* GitHub Actions matrix across Python 3.11 / 3.12 / 3.13
 
 **Backlog**
 
-* Linux systemd user unit — see [issue #4](https://github.com/SnowWarri0r/cc-buddy-bridge/issues/4); help wanted
-* Anything else — open an issue
+* Open an issue — any rough edge, a quirk you hit, a feature you want, a platform that misbehaves
+
+## Contributing
+
+PRs, bug reports, and "I tried it on $WEIRD_LINUX_DISTRO and it broke" stories
+all welcome. For anything larger than a small bug fix, open an issue first so
+we can talk through the design.
+
+### Dev setup
+
+```bash
+git clone https://github.com/SnowWarri0r/cc-buddy-bridge
+cd cc-buddy-bridge
+python3.12 -m venv .venv
+.venv/bin/pip install -e '.[dev]'
+```
+
+The `[dev]` extra pulls in `pytest` + `ruff` (the only dev deps).
+
+### Test & lint
+
+```bash
+.venv/bin/pytest -q                  # ~140 tests, finishes in <1s
+.venv/bin/ruff check src/ tests/     # lint (CI runs this on every PR)
+```
+
+CI runs the test suite across **macOS / Linux / Windows × Python 3.11 / 3.12 / 3.13**.
+A PR turns green only when every cell is happy — if you touch anything
+filesystem-y or path-y, expect Windows to surface the quirks first (NTFS
+ignores POSIX mode bits, backslash vs forward-slash, etc).
+
+### Before touching the wire protocol
+
+The stick firmware has [7 documented sharp edges](#firmware-quirks-we-hit-and-how-we-work-around-them).
+Scan that section before chasing weird BLE behaviour through `bleak`. Most
+"the link keeps flapping" issues turn out to be quirk #1 (non-ASCII bytes
+crash the BLE stack) or quirk #5 (clock mode racing the HUD).
+
+### Commit messages
+
+Short subject line, lowercase, ≤ 70 chars; then a paragraph explaining **why**.
+Browse `git log --oneline` for the register. Don't paste emoji — the
+sanitizer would strip them from the stick anyway.
+
+### Translations
+
+The README mirrors across [English](README.md), [简体中文](README.zh-CN.md),
+and [日本語](README.ja.md). If you touch user-facing prose, please mirror
+across all three when you can; otherwise note in the PR that the other two
+need a translation pass — happy to take that as a follow-up.
+
+### Firmware patches
+
+The buddy firmware lives at [anthropics/claude-desktop-buddy](https://github.com/anthropics/claude-desktop-buddy).
+Changes there need a flashed M5StickC Plus to verify — bridge-side mocks
+won't catch wire-protocol misalignments. Be explicit in the PR description
+about what you've tested vs. what's still theory; reviewers can't tell from
+the diff alone.
 
 ## License
 

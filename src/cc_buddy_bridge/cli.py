@@ -60,6 +60,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_push.add_argument("path", help="Path to the character folder")
 
+    p_update = sub.add_parser(
+        "check-update",
+        help="Check GitHub for a newer cc-buddy-bridge release (forces refresh)",
+    )
+    p_update.add_argument("--no-cache", action="store_true",
+                          help="Ignore cache; always hit the network (default already does)")
+
     p_audit = sub.add_parser(
         "audit",
         help="Show the PreToolUse decision audit log (tail + filter + follow)",
@@ -119,6 +126,11 @@ def main(argv: list[str] | None = None) -> int:
             ascii_only=args.ascii,
             follow=args.follow,
         )
+    if args.cmd == "check-update":
+        from .version_check import check, render_cli
+        info = check(force=True)
+        print(render_cli(info))
+        return 1 if info.has_update else 0
 
     return 1
 
