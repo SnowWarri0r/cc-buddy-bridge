@@ -142,6 +142,19 @@ Linux 特有的几个小坑：
 
 `cc-buddy-bridge status` 可以一次性查看 hooks 与服务两者的安装状态。
 
+### 自定义 IPC 传输
+
+daemon 跟 hook 脚本走的是本地 IPC 通道。默认配置覆盖 99% 场景，剩下 1% 留了两个开关：
+
+| 系统          | 默认传输                                   | 覆盖方式 `--socket` 或 `CC_BUDDY_BRIDGE_SOCK` |
+| ------------- | ----------------------------------------- | ---------------------------------------------- |
+| macOS / Linux | Unix socket `/tmp/cc-buddy-bridge.sock`   | 改成别的路径，比如 `~/cc-buddy.sock`            |
+| Windows       | TCP loopback `127.0.0.1:48765`            | 改端口，比如 `:49000` 或 `127.0.0.1:49000`      |
+
+Windows 上端口 48765 跟别的进程冲突时：跑 `cc-buddy-bridge daemon --socket :49000`，
+hud 调用也带同样的 `--socket`（或者 `export CC_BUDDY_BRIDGE_SOCK=:49000`
+一次性给所有 hook 脚本设好）。
+
 ### 把 stick 状态显示在 Claude Code 状态栏
 
 `cc-buddy-bridge hud` 输出一行紧凑摘要（电量、加密状态、待处理权限）。把它接到
@@ -393,14 +406,13 @@ TFT_eSPI 的 `decodeUTF8()` 状态机一直等永不到来的续位字节，
 真正的根因是 [@omengye](https://github.com/omengye) 在他们的 fork
 里诊断出来的，credit 归他们。
 
-**当前的绕过**：`protocol.py` 里的 `sanitize_for_stick()` 仍把
-`0x20`–`0x7E`（外加 tab）以外的字节全部改成 `?`。比真正的修法保守得多
-也有损，但稳定。
-
-**待落地的正确修法**（在
-[#12](https://github.com/SnowWarri0r/cc-buddy-bridge/issues/12) 跟踪）：
-`BuddyBLE.send()` 按 `mtu_size − 3` 分包发送；放宽 sanitizer 让所有
-BMP 字符通过，只剥补充平面（emoji 主力）、代理项（surrogates）和控制字符。
+**修法已落地于 [`182bfed`](https://github.com/SnowWarri0r/cc-buddy-bridge/commit/182bfed)**
+（PR [#14](https://github.com/SnowWarri0r/cc-buddy-bridge/pull/14) 来自
+[@omengye](https://github.com/omengye)）：`BuddyBLE.send()` 现在按 `mtu_size − 3`
+分包发送、并主动避开在 codepoint 中间切（`_utf8_safe_chunks`）；
+`sanitize_for_stick()` 放行所有 BMP 字符，只把补充平面（emoji 主力）、
+代理项和 C0/C1 控制字符替换为 `?`。Hook 端 stdin 强制按 UTF-8 解码，
+Windows `cp936` 控制台用户再也不会看到 CJK 乱码。
 
 ### 2. `entries` 在线上的顺序是从旧到新，不是从新到旧
 

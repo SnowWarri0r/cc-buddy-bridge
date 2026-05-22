@@ -148,6 +148,21 @@ Ubuntu 22.04 LTS で動作確認済み。systemd user manager のあるディス
 
 `cc-buddy-bridge status` は hooks とサービスの両方の状態をまとめて報告します。
 
+### IPC トランスポートのカスタマイズ
+
+デーモンとフックスクリプトはローカル IPC で通信します。デフォルトで 99% は
+カバーされますが、残り 1% のためにスイッチを 2 つ用意してあります：
+
+| OS            | デフォルトトランスポート                   | `--socket` または `CC_BUDDY_BRIDGE_SOCK` で上書き |
+| ------------- | ---------------------------------------- | ------------------------------------------------ |
+| macOS / Linux | Unix socket `/tmp/cc-buddy-bridge.sock`  | 任意のパス、例：`~/cc-buddy.sock`                 |
+| Windows       | TCP loopback `127.0.0.1:48765`           | 任意のポート、例：`:49000` または `127.0.0.1:49000` |
+
+Windows でポート 48765 が他プロセスと衝突したら、
+`cc-buddy-bridge daemon --socket :49000` を実行し、hud 呼び出しにも同じ
+`--socket` を渡してください。あるいは `export CC_BUDDY_BRIDGE_SOCK=:49000`
+で全フックスクリプトに対して一度に設定するのも OK。
+
 ### Claude Code のステータスラインに stick の状態を表示する
 
 `cc-buddy-bridge hud` はバッテリー、暗号化状態、保留中の権限プロンプトを 1 行に
@@ -415,14 +430,15 @@ JSON を受け取ります（例：「你」の `0xE4 0xBD 0xA0` のうち先頭
 真の根本原因は [@omengye](https://github.com/omengye) さんのフォークで
 診断されたもの。クレジットはそちらに。
 
-**現状の回避策**：`protocol.py` の `sanitize_for_stick()` は今でも
-`0x20`–`0x7E`（+ tab）以外を `?` に書き換えます。正しい修正と比べて
-過剰に保守的で情報損失ありですが、安定しています。
-
-**本来の修正**（[#12](https://github.com/SnowWarri0r/cc-buddy-bridge/issues/12)
-で追跡中）：`BuddyBLE.send()` を `mtu_size − 3` で分割送信し、
-sanitizer を BMP 全通過に緩めて、補助面（emoji 大半）/ サロゲート /
-制御文字のみ除去する。
+**修正は [`182bfed`](https://github.com/SnowWarri0r/cc-buddy-bridge/commit/182bfed)
+にてマージ済み**（PR [#14](https://github.com/SnowWarri0r/cc-buddy-bridge/pull/14)、
+[@omengye](https://github.com/omengye) より）：`BuddyBLE.send()` は
+`mtu_size − 3` で分割し、コードポイントの途中で切れないように
+（`_utf8_safe_chunks`）動作します。`sanitize_for_stick()` は BMP を
+すべてそのまま通し、補助面（emoji 大半）、サロゲート、C0/C1 制御文字
+のみ `?` に置き換えます。フック側 stdin は OS コンソールの
+コードページに関係なく UTF-8 として解釈されるため、Windows の `cp936`
+ユーザーでも CJK の文字化けは起きません。
 
 ### 2. `entries` のワイヤー順は新しい順ではなく古い順
 
