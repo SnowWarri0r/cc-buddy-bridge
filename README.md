@@ -162,6 +162,21 @@ your distro needs a tweak.
 
 `cc-buddy-bridge status` reports both hook and service status.
 
+### Customizing the IPC transport
+
+The daemon and hook scripts talk over a local IPC channel. The default
+fits 99% of setups, but two knobs are exposed for the rest:
+
+| OS      | Default transport                  | Override via `--socket` or `CC_BUDDY_BRIDGE_SOCK` |
+| ------- | ---------------------------------- | ------------------------------------------------- |
+| macOS / Linux | Unix socket `/tmp/cc-buddy-bridge.sock` | another path, e.g. `~/cc-buddy.sock`        |
+| Windows | TCP loopback `127.0.0.1:48765`     | another port, e.g. `:49000` or `127.0.0.1:49000`  |
+
+If port 48765 is already in use on Windows, run
+`cc-buddy-bridge daemon --socket :49000` and pass the same `--socket` to
+`hud` invocations (or `export CC_BUDDY_BRIDGE_SOCK=:49000` to set it once
+for all hook scripts).
+
 ### Show the stick's state in Claude Code's status line
 
 `cc-buddy-bridge hud` prints a compact one-line summary (battery,
@@ -433,14 +448,13 @@ render or BLE task wedges and the link visibly resets ~1 s later.
 The real root cause was diagnosed by
 [@omengye](https://github.com/omengye) in their fork; full credit there.
 
-**Current workaround:** `sanitize_for_stick()` in `protocol.py` still
-rewrites everything outside `0x20`–`0x7E` (and tab) to `?`. Lossy and
-overly conservative relative to the real fix, but stable.
-
-**Pending proper fix** (tracked in [#12](https://github.com/SnowWarri0r/cc-buddy-bridge/issues/12)):
-chunk `BuddyBLE.send()` writes at `mtu_size − 3`, relax the sanitizer
-to pass all BMP codepoints through, and strip only supplementary-plane
-(most emoji), surrogates, and control chars.
+**Fix landed in [`182bfed`](https://github.com/SnowWarri0r/cc-buddy-bridge/commit/182bfed)** (PR [#14](https://github.com/SnowWarri0r/cc-buddy-bridge/pull/14) by [@omengye](https://github.com/omengye)):
+`BuddyBLE.send()` now chunks writes at `mtu_size − 3` *and* refuses to end
+a chunk mid-codepoint (`_utf8_safe_chunks`). `sanitize_for_stick()` passes
+all BMP codepoints through; only supplementary-plane (most emoji),
+surrogates, and C0/C1 control chars are still replaced. Hook stdin is
+decoded as UTF-8 regardless of the OS console codepage, so Windows
+`cp936` users no longer see CJK mojibake.
 
 ### 2. `entries` wire order is oldest-first, not newest-first
 
