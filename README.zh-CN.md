@@ -26,6 +26,7 @@ buddy 固件官方只跟 Claude for macOS/Windows 桌面端配对。本项目让
 - **一行命令安装 + 开机自启** —— `cc-buddy-bridge install --service` 自动选对每个 OS 的后端：macOS 用 launchd、Linux 用 systemd 用户级 unit、Windows 用任务计划程序。
 - **自定义 GIF 角色** —— `cc-buddy-bridge push-character ./pack/` 通过 BLE 上传一整个动画包，自带分块流控。
 - **新版本提示 + 自更新** —— daemon 每天后台轮询一次 GitHub releases；有新版时 hud 多一段 `↑ vX.Y.Z`。`cc-buddy-bridge check-update` 显式查询，`cc-buddy-bridge update` 一键拉新代码 + 重装 + 重启 daemon。轮询用 `CC_BUDDY_BRIDGE_NO_UPDATE_CHECK=1` 关闭。
+- **stick 上显示中文（可选，**强烈推荐**）** —— 配套 fork 固件 [SnowWarri0r/claude-desktop-buddy `feat/cjk-display-zh-cn`](https://github.com/SnowWarri0r/claude-desktop-buddy/tree/feat/cjk-display-zh-cn) 把 stock 固件那个 ASCII-only 字体换成 [Fusion Pixel Font](https://github.com/TakWolf/fusion-pixel-font)（OFL）12×12 字形，简体中文直接渲染（繁中 / 日文规划中）。设 `CC_BUDDY_CJK_TARGET=zh-CN` 后桥端自动切 GBK wire 编码。详见 [stick 上显示中文](#stick-上显示中文可选强烈推荐)。
 
 ## 工作原理
 
@@ -358,6 +359,78 @@ Windows 在 `%LOCALAPPDATA%\cc-buddy-bridge\update_check.json`。
 固件版本检测暂不在范围内——stick 的 status ack 不带固件版本字段，
 上游 [anthropics/claude-desktop-buddy](https://github.com/anthropics/claude-desktop-buddy)
 也没有 release / tag 可对比。
+
+## stick 上显示中文（可选，**强烈推荐**）
+
+官方固件用的是 5×7 ASCII 字体，中文 / 日文 / 韩文内容在 stick 上显示成一排 `?`（[quirk #1](#1-utf-8-多字节序列在-ble-链路上被剪在字符中间)）。
+上游 CONTRIBUTING 明确说不接收新功能，所以"加 CJK 字体并合并回主线"这条路不可行。
+所以我们做了个**fork-only 固件变体**：
+**[github.com/SnowWarri0r/claude-desktop-buddy `feat/cjk-display-zh-cn`](https://github.com/SnowWarri0r/claude-desktop-buddy/tree/feat/cjk-display-zh-cn)**
+—— 你自己刷一下就能看到中文。stock 固件用户不受影响：桥端默认仍然把 CJK 替换为 `?`，
+直到你显式开启 CJK 模式才会发原文。
+
+### 当前状态
+
+| 目标 | 固件 build | 桥端 codec | 状态 |
+| --- | --- | --- | --- |
+| **简体中文 (zh-CN)** | `m5stickc-plus-cjk-zh-cn` | `gbk` | ✅ **可用** —— GB2312 zones 1-55（符号 + Level 1 汉字），约 4300 字形 |
+| 繁体中文 (zh-TW) | `m5stickc-plus-cjk-zh-tw` | `big5` | 🚧 规划中——桥端 codec 已就位；固件 build 还用简体字形 |
+| 日文 (ja) | `m5stickc-plus-cjk-ja` | `shift_jis` | 🚧 规划中——同上 |
+
+### 启用步骤（简体中文）
+
+1. **刷 fork 的 CJK 固件变体**。把
+   [SnowWarri0r/claude-desktop-buddy](https://github.com/SnowWarri0r/claude-desktop-buddy)
+   clone 下来，切到 `feat/cjk-display-zh-cn` 分支，跑
+   `pio run -e m5stickc-plus-cjk-zh-cn -t upload --upload-port /dev/cu.usbserial-...`
+   （把串口路径换成你 stick 的）。CJK 变体增加约 120 KB 二进制；
+   GIF 角色包用的 spiffs 分区**不受影响**。
+
+2. **告诉桥端发 GBK 字节**。给 daemon 加环境变量 `CC_BUDDY_CJK_TARGET=zh-CN`。
+
+   macOS:
+
+   ```bash
+   plutil -insert EnvironmentVariables.CC_BUDDY_CJK_TARGET -string zh-CN \
+       ~/Library/LaunchAgents/com.github.cc-buddy-bridge.daemon.plist
+   launchctl bootout gui/$(id -u)/com.github.cc-buddy-bridge.daemon
+   launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.github.cc-buddy-bridge.daemon.plist
+   ```
+
+   Linux：编辑 `~/.config/systemd/user/cc-buddy-bridge.service`，在
+   `[Service]` 下加 `Environment=CC_BUDDY_CJK_TARGET=zh-CN`，然后
+   `systemctl --user daemon-reload && systemctl --user restart cc-buddy-bridge.service`。
+
+3. **验证**。daemon 启动日志会写 `cjk firmware target=zh-CN, wire codec=gbk`。
+   下次助手有中文回复时，stick 屏幕会显示真正的汉字而不是 `?` 串。
+
+想退回原版：去掉这个 env、再刷回默认 `m5stickc-plus` build 即可。
+
+### 幕后改了什么
+
+- **桥端 wire 格式**：`sanitize_for_stick` 从"仅 ASCII"切到"GBK 可编码"；
+  `encode()` 手写心跳 JSON，字符串值用 GBK 字节直接放进双引号里
+  （key、数字、JSON 结构符号还是 ASCII）。stick 上的 ArduinoJson 7 接收这种 JSON
+  —— 它不对 string 值的 UTF-8 做校验。
+- **固件渲染**：`cjk_render.cpp` 里 sprite-aware 的混合脚本渲染器逐字节走：
+  ASCII (< 0x80) 用 `Fonts/ASC12.h` 画 6×12，GBK 字节对（两个字节都在 0xA1-0xFE）
+  用 `Fonts/GB2312_L1.h` 画 12×12。`drawHUD` 把每行先经过一个像素感知 + GBK 感知的
+  wrap 函数，长内容自然换行而不是在右边被切掉。
+
+### 字体来源
+
+CJK 固件变体用的字体是 [Fusion Pixel Font](https://github.com/TakWolf/fusion-pixel-font)
+12px monospaced 子集（zh\_hans + Latin），按 **SIL Open Font License 1.1** 授权。
+OFL 全文 + 上游 fonts（Ark Pixel、Cubic 11、Galmuri）的各自署名都打包在
+固件仓库的 `src/Fonts/` 下。感谢 @TakWolf 把这个字体做出来。
+
+### 注意事项
+
+- emoji（补充平面 codepoint）在 GBK / Big5 / SJIS 三个双字节编码里都不存在；
+  sanitizer 在 CJK 模式下仍把 emoji 替换成 `?`
+- Level-2 汉字（GB2312 zones 56-87，更生僻的字）没打包进来以省 flash；
+  渲染时 fallback 成 `??`。日常普通话用字 ~99% 都在 Level 1
+- fork 固件没有自动更新机制——上游有新改动时需要你手动 pull 重刷
 
 ## 系统要求
 
