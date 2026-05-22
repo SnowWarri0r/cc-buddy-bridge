@@ -145,27 +145,37 @@ class LineAssembler:
 def sanitize_for_stick(text: str) -> str:
     """Strip characters the stick's font can't safely render.
 
-    Firmware now ships a CJK-capable font, so BMP characters (U+0000–U+FFFF)
-    including CJK unified ideographs, fullwidth punctuation, and kana are all
-    renderable. We still strip:
-      - C0/C1 control characters (except tab) — no glyph, undefined behaviour
-      - Supplementary-plane codepoints (U+10000+) such as emoji — font table
-        only covers BMP; these would still cause an out-of-range index fault
-      - Lone surrogates (U+D800–U+DFFF) — invalid as standalone codepoints
+    History of getting this wrong twice:
+
+    1. v0.1.0 — blamed firmware's ASCII-only 5×7 GFX font for the "BLE
+       crashes on CJK" symptom, stripped everything outside 0x20–0x7E.
+    2. PR #14 (@omengye, merged) — diagnosed BLE write truncation at
+       MTU − 3 as the *primary* cause, fixed the chunking, and relaxed
+       this function to pass BMP through claiming "firmware now ships
+       a CJK-capable font."
+
+    Observed reality (2026-05-22): with #14's BLE chunking landed *and*
+    the relaxed sanitizer, heartbeats carrying CJK in ``entries`` still
+    crash-loop the stick (BLE drops ~1.3 s after the heartbeat write).
+    The stock firmware does NOT enable HZK16 — see quirk #1 in the
+    README. The truncation fix is genuine and stays in place; the
+    sanitizer reverts to ASCII-only until the firmware actually ships a
+    glyph table that covers what we send.
+
+    Strip everything outside printable ASCII + tab. CJK becomes '?' on
+    the stick again. Tracked for follow-up in a future issue.
     """
     if not text:
         return text
     out = []
     for ch in text:
         cp = ord(ch)
-        if cp > 0xFFFF:
-            out.append(UNRENDERABLE_REPLACEMENT)
-        elif 0xD800 <= cp <= 0xDFFF:
-            out.append(UNRENDERABLE_REPLACEMENT)
-        elif (cp < 0x20 and ch != "\t") or cp == 0x7F or 0x80 <= cp <= 0x9F:
-            out.append(UNRENDERABLE_REPLACEMENT)
-        else:
+        if 0x20 <= cp <= 0x7E:
             out.append(ch)
+        elif ch == "\t":
+            out.append(ch)
+        else:
+            out.append(UNRENDERABLE_REPLACEMENT)
     return "".join(out)
 
 
