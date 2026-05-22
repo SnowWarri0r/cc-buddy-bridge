@@ -27,6 +27,7 @@ buddy ファームウェアは公式には Claude for macOS/Windows のデスク
 - **ワンコマンドのインストール + 自動起動** —— `cc-buddy-bridge install --service` が OS ごとに正しいバックエンドを選びます（macOS は launchd、Linux は systemd ユーザーユニット、Windows はタスクスケジューラ）。
 - **カスタム GIF キャラクター** —— `cc-buddy-bridge push-character ./pack/` でフレームの入ったフォルダを BLE 経由でアップロードします。チャンク化されたフロー制御つき。
 - **新バージョン通知 + 自動更新** —— デーモンが GitHub releases を 1 日 1 回バックグラウンドで取得し、新タグがあれば hud に `↑ vX.Y.Z` を表示。`cc-buddy-bridge check-update` で明示チェック、`cc-buddy-bridge update` で pull + 再インストール + デーモン再起動まで一気に実行。ポーリング無効化は `CC_BUDDY_BRIDGE_NO_UPDATE_CHECK=1`。
+- **stick での CJK 表示（オプション）** —— フォーク専用ファームウェア [SnowWarri0r/claude-desktop-buddy](https://github.com/SnowWarri0r/claude-desktop-buddy) が ASCII 限定の標準フォントを [Fusion Pixel Font](https://github.com/TakWolf/fusion-pixel-font)（OFL）12×12 グリフに置き換えて簡体中国語を描画（繁体中国語 / **日本語は計画中**）。`CC_BUDDY_CJK_TARGET=zh-CN` を設定するとブリッジが自動で GBK ワイヤエンコーディングに切り替わります。詳細は [stick に CJK 表示](#stick-に-cjk-表示オプション)。
 
 ## 仕組み
 
@@ -377,6 +378,96 @@ Windows は `%LOCALAPPDATA%\cc-buddy-bridge\update_check.json`。
 ファームウェアバージョンフィールドがなく、上流
 [anthropics/claude-desktop-buddy](https://github.com/anthropics/claude-desktop-buddy)
 にも比較すべき release / tag がないためです。
+
+## stick に CJK 表示（オプション）
+
+stock ファームウェアは ASCII 限定の 5×7 フォントしか持たないため、
+日本語 / 中国語 / 韓国語のコンテンツは stick 上で `?` の列になります
+（[quirk #1](#1-utf-8-マルチバイト列が-ble-上で文字の途中で切られる)）。
+上流の CONTRIBUTING は "新機能は受け付けない" と明記しているので、
+CJK フォントを上流マージするルートはありません。代わりに
+**フォーク専用のファームウェアビルド** を用意しました：
+[github.com/SnowWarri0r/claude-desktop-buddy](https://github.com/SnowWarri0r/claude-desktop-buddy)
+で自分でフラッシュすれば、stick が CJK を描画できるようになります。
+stock ファームウェアのユーザーには影響しません —— ブリッジは明示的に
+オプトインするまで、保守的な ASCII サニタイザーを維持します。
+
+### 現状
+
+| ターゲット | ファームウェアビルド | ブリッジ codec | 状態 |
+| --- | --- | --- | --- |
+| 簡体中国語 (zh-CN) | `m5stickc-plus-cjk-zh-cn` | `gbk` | ✅ 利用可能 — GB2312 ゾーン 1-55（記号 + Level 1 漢字）、~4300 字 |
+| 繁体中国語 (zh-TW) | `m5stickc-plus-cjk-zh-tw` | `big5` | 🚧 計画中 — ブリッジ codec は配線済み、ファームビルドは簡体グリフ流用 |
+| **日本語 (ja)** | `m5stickc-plus-cjk-ja` | `shift_jis` | 🚧 **計画中** — 同上、JIS X 0208 グリフ抽出は未実装 |
+
+日本語版は順番待ちです。Fusion Pixel Font の ja BDF は既に
+取得済みなので、変換スクリプトを ``shift_jis`` codec に切り替えれば
+スクラッチから書き直しは不要。Issue で push してくれれば優先度を上げます。
+
+### 有効化手順（簡体中国語向け。日本語版が来たら同じ手順）
+
+1. **フォークの CJK ファームウェアをフラッシュ。**
+   [SnowWarri0r/claude-desktop-buddy](https://github.com/SnowWarri0r/claude-desktop-buddy)
+   を clone し、`feat/cjk-display-zh-cn` ブランチをチェックアウトして、
+   `pio run -e m5stickc-plus-cjk-zh-cn -t upload --upload-port /dev/cu.usbserial-...`
+   を実行（シリアルパスは自分の stick のものに置き換え）。CJK ビルドは
+   firmware バイナリを ~120 KB 増やしますが、spiffs パーティション
+   （GIF キャラパック用）には影響しません。
+
+2. **ブリッジに GBK バイトで送信させる。** デーモンの環境変数に
+   `CC_BUDDY_CJK_TARGET=zh-CN` を追加します。macOS:
+
+   ```bash
+   plutil -insert EnvironmentVariables.CC_BUDDY_CJK_TARGET -string zh-CN \
+       ~/Library/LaunchAgents/com.github.cc-buddy-bridge.daemon.plist
+   launchctl bootout gui/$(id -u)/com.github.cc-buddy-bridge.daemon
+   launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.github.cc-buddy-bridge.daemon.plist
+   ```
+
+   Linux: `~/.config/systemd/user/cc-buddy-bridge.service` を編集し、
+   `[Service]` 配下に `Environment=CC_BUDDY_CJK_TARGET=zh-CN` を追加、
+   `systemctl --user daemon-reload && systemctl --user restart cc-buddy-bridge.service` を実行。
+
+3. **動作確認。** デーモンログに `cjk firmware target=zh-CN, wire codec=gbk`
+   が出ます。次のアシスタントターンに中国語が含まれていれば、
+   stick の画面に `?` ではなく実際の文字が描画されます。
+
+stock 動作に戻すには env を削除し、デフォルトの `m5stickc-plus` ビルドを
+再フラッシュしてください。
+
+### 裏側で何が変わるか
+
+- **ブリッジのワイヤ形式。** `sanitize_for_stick` が ASCII 限定から
+  GBK エンコード可能に切り替わり、`encode()` はハートビート JSON を
+  手動で組み立てて、文字列値を引用符の中に GBK バイトとして埋め込みます
+  （キー、数値、構造記号は ASCII のまま）。stick の ArduinoJson 7 は
+  これを受け入れます —— string 値の UTF-8 検証は行わないからです。
+- **ファームウェアの描画。** スプライト対応の混合スクリプトレンダラー
+  （`cjk_render.cpp`）がバイト列を走査し、ASCII (< 0x80) は
+  `Fonts/ASC12.h` から 6×12 グリフを描き、GBK ペア（両バイト 0xA1-0xFE）
+  は `Fonts/GB2312_L1.h` から 12×12 グリフを描きます。`drawHUD` は
+  ピクセル & GBK 対応のラップを通すので、長いエントリは右端で切れずに
+  きれいに折り返します。
+
+### フォントクレジット
+
+CJK ファームウェアバリアントは
+[Fusion Pixel Font](https://github.com/TakWolf/fusion-pixel-font)
+12px monospaced を使用しており、**SIL Open Font License 1.1** に基づきます。
+OFL 全文と、Fusion Pixel が統合している上流フォント（Ark Pixel、Cubic 11、
+Galmuri）の個別クレジットは、ファームウェアフォークの `src/Fonts/` に
+同梱されています。@TakWolf さんに感謝。
+
+### 注意点
+
+- emoji（補助平面コードポイント）は GBK / Big5 / SJIS いずれの 2 バイト
+  エンコーディングにも入っていません。CJK モードでも emoji は `?` に
+  置き換えられます。
+- Level-2 漢字（GB2312 ゾーン 56-87、稀少字）はフラッシュ容量節約のため
+  同梱していません。描画時に `??` にフォールバックします。日常の中国語
+  使用の 99% は Level 1 でカバーされます。
+- フォークファームウェアには自動更新の仕組みがありません ——
+  上流に変更があれば手動で pull して再フラッシュしてください。
 
 ## 動作環境
 
