@@ -15,12 +15,19 @@ from .jsonl_tailer import JSONLTailer
 from .matchers import MatcherConfig, classify_command
 from .matchers import load_config as load_matcher_config
 from .protocol import (
+    ENTRY_MAX_BYTES,
     HEARTBEAT_KEEPALIVE,
     build_heartbeat,
     build_time_sync,
+    truncate_utf8_bytes,
 )
 from .state import State
 from .version_check import check as version_check
+
+# Entry text is prefixed with a 2-byte marker ("> ", "@ ", "+ ") before being
+# stored. Budget the user-supplied portion so the full entry stays within the
+# firmware's line buffer without _format_entry needing to re-truncate.
+_ENTRY_PAYLOAD_MAX_BYTES = ENTRY_MAX_BYTES - 2
 
 log = logging.getLogger(__name__)
 
@@ -226,7 +233,7 @@ class Daemon:
             self.state.turn_begin(session_id)
             prompt = req.get("prompt")
             if isinstance(prompt, str) and prompt:
-                self.state.add_entry(f"> {prompt[:60]}")
+                self.state.add_entry(f"> {truncate_utf8_bytes(prompt, _ENTRY_PAYLOAD_MAX_BYTES)}")
             await self._push_heartbeat()
             return {"ok": True}
 
@@ -245,15 +252,15 @@ class Daemon:
                 self._deferred_turn_end(session_id, delay=15.0)
             )
             # Trigger the firmware's celebrate animation for a few seconds.
-            # Force-push so the heartbeat carrying completed=true reaches the
-            # stick within ~50ms of the turn ending — animation lines up with
-            # the visual change in the terminal. Schedule a follow-up push at
-            # the pulse end so the animation stops exactly on time instead of
-            # waiting up to ~10s for the next keepalive.
+            # Set the pulse state synchronously so the heartbeat snapshot is
+            # correct before anything is pushed.
             CELEBRATE_SECS = 5.0
             self.state.pulse_completed(duration_secs=CELEBRATE_SECS)
-            await self._push_heartbeat(force=True)
-            asyncio.create_task(self._heartbeat_after(CELEBRATE_SECS + 0.1))
+            # Kick off the BLE push in the background so this coroutine can
+            # return {"ok": True} immediately — the Stop hook caller must not
+            # block on _push_heartbeat(force=True) or it surfaces as ETIMEDOUT
+            # in the plugin's spawnSync call.
+            asyncio.create_task(self._turn_end_side_effects(CELEBRATE_SECS))
             return {"ok": True}
 
         if evt == "pretooluse":
@@ -494,10 +501,27 @@ class Daemon:
         message). Emitting here beats the Stop hook, so the stick receives
         the '@ ...' entry while the user is still looking at the terminal —
         before auto-off kicks in."""
-        self.state.add_entry(f"@ {text[:70]}")
+        self.state.add_entry(f"@ {truncate_utf8_bytes(text, _ENTRY_PAYLOAD_MAX_BYTES)}")
         log.info("tailer: new assistant text → entry added (state.entries=%d)",
                  len(self.state.entries))
         await self._push_heartbeat(force=True)
+
+    async def _turn_end_side_effects(self, celebrate_secs: float) -> None:
+        """Post-response work for a turn_end event, run as a background task.
+
+        Runs *after* the IPC ``{"ok": True}`` reply has been sent, so the Stop
+        hook's spawnSync call never waits on a BLE write.
+
+        1. Force-push the heartbeat carrying ``completed=true`` so the stick's
+           celebrate animation fires within ~50 ms of the turn ending.
+        2. Schedule a follow-up push at pulse end so ``completed`` flips back
+           to false on time rather than waiting for the next keepalive.
+        """
+        try:
+            await self._push_heartbeat(force=True)
+        except Exception:  # noqa: BLE001
+            log.exception("turn_end side effects: _push_heartbeat(force=True) failed")
+        asyncio.create_task(self._heartbeat_after(celebrate_secs + 0.1))
 
     async def _heartbeat_after(self, delay: float) -> None:
         """Schedule one heartbeat push after ``delay`` seconds. Used by the
@@ -598,7 +622,7 @@ class Daemon:
         if text:
             log.info("turn end: adding entry '@ %s...' (state.entries len before=%d)",
                      text[:30], len(self.state.entries))
-            self.state.add_entry(f"@ {text[:70]}")
+            self.state.add_entry(f"@ {truncate_utf8_bytes(text, _ENTRY_PAYLOAD_MAX_BYTES)}")
             await self._push_heartbeat(force=True)
             if content_key is not None:
                 self._last_emitted_turn_key[transcript_path] = content_key
