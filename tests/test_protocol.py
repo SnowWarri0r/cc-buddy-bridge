@@ -204,3 +204,116 @@ def test_turn_event_sanitizes_nested_content():
     evt = build_turn_event("assistant", [{"type": "text", "text": "done 🎉"}])
     assert evt is not None
     assert "🎉" not in evt["content"][0]["text"]
+
+
+# ---- codec-aware encoding (CJK firmware variant) ----
+
+def test_cjk_codecs_mapping():
+    """Spot-check the codec map: zh-CN → gbk, zh-TW → big5, ja → shift_jis."""
+    from cc_buddy_bridge.protocol import CJK_CODECS
+    assert CJK_CODECS["zh-CN"] == "gbk"
+    assert CJK_CODECS["zh-TW"] == "big5"
+    assert CJK_CODECS["ja"] == "shift_jis"
+
+
+def test_sanitize_for_stick_gbk_passes_cjk():
+    """With codec='gbk', characters representable in GBK pass through."""
+    out = sanitize_for_stick("hello 你好 world", codec="gbk")
+    assert "你" in out and "好" in out
+    assert out == "hello 你好 world"
+
+
+def test_sanitize_for_stick_gbk_strips_emoji():
+    """Emoji are supplementary-plane, not in GBK — replaced with '?'."""
+    out = sanitize_for_stick("press 🎮 now", codec="gbk")
+    assert "🎮" not in out
+    assert "press" in out and "now" in out
+
+
+def test_sanitize_for_stick_gbk_keeps_punctuation():
+    """Full-width punctuation (zone 1) is in GBK — must pass through."""
+    out = sanitize_for_stick("这是、一个，测试。", codec="gbk")
+    for ch in "这是、一个，测试。":
+        assert ch in out
+
+
+def test_sanitize_for_stick_shift_jis_passes_kana():
+    """Hiragana/katakana are in JIS X 0208."""
+    out = sanitize_for_stick("こんにちは Tokyo タワー", codec="shift_jis")
+    assert "こんにちは" in out
+    assert "タワー" in out
+
+
+def test_sanitize_for_stick_unknown_codec_falls_back():
+    """Unknown codec name → ASCII-only fallback (defensive)."""
+    out = sanitize_for_stick("hello 你好", codec="not_a_codec")
+    assert "你" not in out
+
+
+def test_sanitize_for_stick_none_codec_strips_cjk():
+    """Default (codec=None) preserves the ASCII-only safety policy."""
+    out = sanitize_for_stick("hello 你好", codec=None)
+    assert "你" not in out and "好" not in out
+
+
+def test_encode_default_codec_unchanged():
+    """encode() with no codec arg produces the same UTF-8 JSON as before."""
+    from cc_buddy_bridge.protocol import encode
+    out = encode({"a": 1, "msg": "hello"})
+    assert out == b'{"a":1,"msg":"hello"}\n'
+
+
+def test_encode_gbk_codec_emits_gbk_bytes():
+    """encode() with codec='gbk' encodes string values as GBK bytes inline."""
+    from cc_buddy_bridge.protocol import encode
+    out = encode({"msg": "你好"}, codec="gbk")
+    # 你 GBK = C4 E3, 好 GBK = BA C3
+    assert b'"msg":"\xC4\xE3\xBA\xC3"' in out
+    assert out.endswith(b"\n")
+
+
+def test_encode_gbk_keeps_ascii_structure():
+    """Keys and structural JSON stay ASCII; only string *values* switch codec."""
+    from cc_buddy_bridge.protocol import encode
+    out = encode({"total": 5, "msg": "好", "entries": ["A", "好"]}, codec="gbk")
+    # Keys are plain ASCII even under gbk encoding.
+    assert b'"total":5' in out
+    assert b'"msg":"\xBA\xC3"' in out
+    assert b'"entries":["A","\xBA\xC3"]' in out
+
+
+def test_encode_codec_escapes_json_metachars():
+    """Backslash, double-quote, control chars still get JSON-escaped under GBK."""
+    from cc_buddy_bridge.protocol import encode
+    out = encode({"msg": 'has "quote" and \\back'}, codec="gbk")
+    assert b'\\"quote\\"' in out
+    assert b"\\\\back" in out
+
+
+def test_encode_gbk_drops_unencodable():
+    """Emoji can't go through GBK — replaced with '?' via errors='replace'."""
+    from cc_buddy_bridge.protocol import encode
+    out = encode({"msg": "你🎮好"}, codec="gbk")
+    # Emoji becomes '?' (the GBK codec's replacement byte).
+    assert b"?" in out
+    assert b'"msg":"\xC4\xE3?\xBA\xC3"' in out
+
+
+def test_build_heartbeat_threads_codec_into_sanitize():
+    """When build_heartbeat is called with a codec, entries keep their CJK."""
+    from cc_buddy_bridge.protocol import build_heartbeat
+    s = State()
+    s.add_entry("@ 你好世界")
+    snap = build_heartbeat(s, codec="gbk")
+    # The "@ ..." entry survived sanitization with the codec set.
+    assert "你好世界" in snap["entries"][0]
+
+
+def test_build_heartbeat_no_codec_strips_cjk():
+    """Sanity check: same heartbeat without codec ends up '?'-padded."""
+    from cc_buddy_bridge.protocol import build_heartbeat
+    s = State()
+    s.add_entry("@ 你好世界")
+    snap = build_heartbeat(s, codec=None)
+    assert "你好世界" not in snap["entries"][0]
+    assert "?" in snap["entries"][0]

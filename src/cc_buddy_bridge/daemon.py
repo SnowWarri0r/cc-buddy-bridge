@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 from pathlib import Path
 from typing import Any, Optional
@@ -80,6 +81,15 @@ class Daemon:
         # Latest available version string (e.g. "v0.1.1") when an update is
         # available; None otherwise. Set by _update_check_loop.
         self._update_available: Optional[str] = None
+        # Wire codec for heartbeat string fields. Set when the user has
+        # flashed the fork-only CJK firmware variant (`m5stickc-plus-cjk-*`)
+        # and tells the bridge which one via env var. None = stock firmware,
+        # ASCII-only content. See protocol.CJK_CODECS for the mapping.
+        from .protocol import CJK_CODECS
+        _target = os.environ.get("CC_BUDDY_CJK_TARGET", "").strip()
+        self._cjk_codec: Optional[str] = CJK_CODECS.get(_target) if _target else None
+        if self._cjk_codec is not None:
+            log.info("cjk firmware target=%s, wire codec=%s", _target, self._cjk_codec)
         self._shutdown = asyncio.Event()
 
     # ---- entry ----
@@ -125,7 +135,9 @@ class Daemon:
     async def _push_heartbeat(self, force: bool = False) -> None:
         import json
 
-        snap = build_heartbeat(self.state)
+        snap = build_heartbeat(self.state, codec=self._cjk_codec)
+        # Dedup key is the Python-side serialized snapshot, not the wire bytes
+        # — same dict means same content regardless of wire codec.
         serialized = json.dumps(snap, sort_keys=True, ensure_ascii=False)
         now = time.monotonic()
         changed = serialized != self._last_hb_serialized
@@ -139,7 +151,7 @@ class Daemon:
                 snap["entries"][-1] if snap.get("entries") else None,
                 force, changed,
             )
-            ok = await self.ble.send(snap)
+            ok = await self.ble.send(snap, codec=self._cjk_codec)
             if ok:
                 self._last_hb_serialized = serialized
                 self._last_hb_sent_at = now

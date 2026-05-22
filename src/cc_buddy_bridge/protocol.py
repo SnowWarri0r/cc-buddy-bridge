@@ -35,8 +35,18 @@ ENTRY_MAX_BYTES = 60
 # bitmap fonts can't map).
 UNRENDERABLE_REPLACEMENT = "?"
 
+# Maps CJK target → Python codec name. Used by `sanitize_for_stick` and
+# `encode` to switch the wire format when the user has flashed a fork-only
+# firmware build that ships the matching font (see claude-desktop-buddy
+# fork: `m5stickc-plus-cjk-zh-cn` / `-zh-tw` / `-ja`).
+CJK_CODECS: dict[str, str] = {
+    "zh-CN": "gbk",
+    "zh-TW": "big5",
+    "ja":    "shift_jis",
+}
 
-def build_heartbeat(state: State, msg: Optional[str] = None) -> dict[str, Any]:
+
+def build_heartbeat(state: State, msg: Optional[str] = None, codec: Optional[str] = None) -> dict[str, Any]:
     """Build a heartbeat snapshot dict ready for json.dumps + b'\\n'.
 
     Entry order on the wire is **oldest-first**. The reference firmware's
@@ -50,8 +60,8 @@ def build_heartbeat(state: State, msg: Optional[str] = None) -> dict[str, Any]:
         "total": state.total,
         "running": state.running_count,
         "waiting": state.waiting_count,
-        "msg": sanitize_for_stick(msg if msg is not None else _default_msg(state, pending)),
-        "entries": [sanitize_for_stick(_format_entry(e.at, e.text)) for e in reversed(state.entries)],
+        "msg": sanitize_for_stick(msg if msg is not None else _default_msg(state, pending), codec),
+        "entries": [sanitize_for_stick(_format_entry(e.at, e.text, codec), codec) for e in reversed(state.entries)],
         "tokens": state.tokens_cumulative,
         "tokens_today": state.tokens_today,
     }
@@ -63,8 +73,8 @@ def build_heartbeat(state: State, msg: Optional[str] = None) -> dict[str, Any]:
     if pending is not None:
         snapshot["prompt"] = {
             "id": pending.tool_use_id,  # tool_use_id is ASCII by construction
-            "tool": sanitize_for_stick(pending.tool_name),
-            "hint": sanitize_for_stick(truncate_utf8_bytes(pending.hint, 60)),
+            "tool": sanitize_for_stick(pending.tool_name, codec),
+            "hint": sanitize_for_stick(truncate_utf8_bytes(pending.hint, 60), codec),
         }
     return snapshot
 
@@ -108,8 +118,85 @@ def build_name(device_name: str) -> dict[str, Any]:
     return {"cmd": "name", "name": device_name}
 
 
-def encode(obj: dict[str, Any]) -> bytes:
-    return json.dumps(obj, separators=(",", ":"), ensure_ascii=False).encode("utf-8") + b"\n"
+def encode(obj: dict[str, Any], codec: Optional[str] = None) -> bytes:
+    """Serialize obj as one-line JSON, newline-terminated.
+
+    With ``codec`` unset, falls back to standard UTF-8 JSON (json.dumps).
+    With ``codec`` set to a non-UTF-8 name (``gbk`` / ``big5`` / ``shift_jis``),
+    string *values* are encoded in that codec instead — the bytes go straight
+    into the JSON string between quotes, which ArduinoJson 7 stores verbatim.
+    Keys, numeric literals, structural punctuation stay ASCII. Used by the
+    CJK firmware build, where the on-device font tables look up bytes in
+    these legacy double-byte encodings.
+    """
+    if codec is None or codec == "utf-8":
+        return json.dumps(obj, separators=(",", ":"), ensure_ascii=False).encode("utf-8") + b"\n"
+    parts: list[bytes] = []
+    _encode_value(obj, codec, parts)
+    parts.append(b"\n")
+    return b"".join(parts)
+
+
+def _encode_value(v: Any, codec: str, out: list[bytes]) -> None:
+    if isinstance(v, dict):
+        out.append(b"{")
+        first = True
+        for k, vv in v.items():
+            if not first:
+                out.append(b",")
+            first = False
+            _encode_json_string(str(k), "ascii", out)
+            out.append(b":")
+            _encode_value(vv, codec, out)
+        out.append(b"}")
+    elif isinstance(v, list):
+        out.append(b"[")
+        first = True
+        for item in v:
+            if not first:
+                out.append(b",")
+            first = False
+            _encode_value(item, codec, out)
+        out.append(b"]")
+    elif isinstance(v, str):
+        _encode_json_string(v, codec, out)
+    elif isinstance(v, bool):
+        out.append(b"true" if v else b"false")
+    elif isinstance(v, (int, float)):
+        out.append(str(v).encode("ascii"))
+    elif v is None:
+        out.append(b"null")
+    else:
+        _encode_json_string(str(v), codec, out)
+
+
+def _encode_json_string(s: str, codec: str, out: list[bytes]) -> None:
+    """Write a JSON-escaped string with bytes encoded in ``codec``.
+
+    Chars unrepresentable in the codec become '?' (codec error='replace').
+    Inside the quoted body we only escape JSON's metabytes: backslash,
+    double-quote, and C0 controls. Codec high-bit bytes go through raw.
+    """
+    out.append(b'"')
+    raw = s.encode(codec, errors="replace")
+    for byte in raw:
+        if byte == 0x22:        # "
+            out.append(b'\\"')
+        elif byte == 0x5C:      # \
+            out.append(b"\\\\")
+        elif byte == 0x08:
+            out.append(b"\\b")
+        elif byte == 0x09:
+            out.append(b"\\t")
+        elif byte == 0x0A:
+            out.append(b"\\n")
+        elif byte == 0x0D:
+            out.append(b"\\r")
+        elif byte < 0x20:
+            out.append(f"\\u{byte:04x}".encode("ascii"))
+        else:
+            out.append(bytes([byte]))
+    out.append(b'"')
 
 
 # ---- line reassembly for stick → daemon stream ----
@@ -142,47 +229,59 @@ class LineAssembler:
 
 # ---- sanitization ----
 
-def sanitize_for_stick(text: str) -> str:
+def sanitize_for_stick(text: str, codec: Optional[str] = None) -> str:
     """Strip characters the stick's font can't safely render.
 
-    History of getting this wrong twice:
+    Two regimes, controlled by ``codec``:
 
-    1. v0.1.0 — blamed firmware's ASCII-only 5×7 GFX font for the "BLE
-       crashes on CJK" symptom, stripped everything outside 0x20–0x7E.
-    2. PR #14 (@omengye, merged) — diagnosed BLE write truncation at
-       MTU − 3 as the *primary* cause, fixed the chunking, and relaxed
-       this function to pass BMP through claiming "firmware now ships
-       a CJK-capable font."
+    - ``codec is None`` (stock firmware): strip everything outside printable
+      ASCII + tab. CJK becomes ``?`` because the default 5×7 font has no
+      glyphs for it and history shows the firmware crashes (LoadProhibited
+      from out-of-bounds font-table reads) when high-bit codepoints reach
+      the GLCD path. Two earlier sanitizer revisions both bit us — see git
+      log on this file and the README quirk #1 narrative.
 
-    Observed reality (2026-05-22): with #14's BLE chunking landed *and*
-    the relaxed sanitizer, heartbeats carrying CJK in ``entries`` still
-    crash-loop the stick (BLE drops ~1.3 s after the heartbeat write).
-    The stock firmware does NOT enable HZK16 — see quirk #1 in the
-    README. The truncation fix is genuine and stays in place; the
-    sanitizer reverts to ASCII-only until the firmware actually ships a
-    glyph table that covers what we send.
-
-    Strip everything outside printable ASCII + tab. CJK becomes '?' on
-    the stick again. Tracked for follow-up in a future issue.
+    - ``codec in CJK_CODECS.values()`` (CJK firmware variant flashed):
+      pass through every character representable in the target codec
+      (``gbk`` covers GB2312, ``big5`` covers BIG5, ``shift_jis`` covers
+      JIS X 0208). Characters not in the codec — most emoji, mismatched
+      scripts — become ``?`` via Python's ``errors='replace'`` codec
+      mechanism. The downstream encode() call serializes string values as
+      target-codec bytes, which the firmware's font tables index directly.
     """
     if not text:
         return text
-    out = []
-    for ch in text:
-        cp = ord(ch)
-        if 0x20 <= cp <= 0x7E:
-            out.append(ch)
-        elif ch == "\t":
-            out.append(ch)
-        else:
-            out.append(UNRENDERABLE_REPLACEMENT)
-    return "".join(out)
+    if codec is None or codec == "utf-8":
+        out: list[str] = []
+        for ch in text:
+            cp = ord(ch)
+            if 0x20 <= cp <= 0x7E:
+                out.append(ch)
+            elif ch == "\t":
+                out.append(ch)
+            else:
+                out.append(UNRENDERABLE_REPLACEMENT)
+        return "".join(out)
+    # Codec-aware regime: round-trip through the target encoding so any
+    # character not representable in it becomes the codec's replacement byte
+    # (Python writes a literal '?' on encode-error='replace'), and the result
+    # decodes back to a string of representable characters.
+    try:
+        return text.encode(codec, errors="replace").decode(codec, errors="replace")
+    except LookupError:
+        # Unknown codec — fall back to the conservative ASCII policy.
+        return sanitize_for_stick(text, None)
 
 
 # ---- internals ----
 
-def _format_entry(at: float, text: str) -> str:
-    # Format: "HH:MM text" — REFERENCE.md shows "10:42 git push".
+def _format_entry(at: float, text: str, codec: Optional[str] = None) -> str:
+    """Format an entry for the wire: ``HH:MM text``. REFERENCE.md shows
+    ``10:42 git push``. The codec argument is reserved for callers that
+    want a codec-aware variant later; it's accepted-but-unused right now
+    because the firmware does its own pixel-aware wrap on incoming lines.
+    """
+    del codec  # unused; the wrap renderer handles long lines downstream.
     hhmm = datetime.fromtimestamp(at).strftime("%H:%M")
     text = text.replace("\n", " ").strip()
     return f"{hhmm} {truncate_utf8_bytes(text, ENTRY_MAX_BYTES)}"
