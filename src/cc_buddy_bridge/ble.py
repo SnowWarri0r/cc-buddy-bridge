@@ -73,8 +73,14 @@ class BuddyBLE:
         data = encode(obj)
         try:
             async with self._send_lock:
-                # Write without response for throughput. MTU-sized chunks if needed.
-                await self._client.write_gatt_char(NUS_RX_UUID, data, response=False)
+                # ATT Write Without Response payload = MTU - 3 bytes overhead.
+                # Chunk so multi-byte UTF-8 sequences never straddle a packet boundary.
+                chunk_size = max(20, self._client.mtu_size - 3)
+                for chunk in _utf8_safe_chunks(data, chunk_size):
+                    await self._client.write_gatt_char(NUS_RX_UUID, chunk, response=False)
+                    # Yield so the BLE host stack can drain Write Without Response
+                    # credits before the next chunk; prevents silent drops.
+                    await asyncio.sleep(0)
             return True
         except Exception as e:  # noqa: BLE001
             log.warning("ble send failed: %s", e)
@@ -154,3 +160,47 @@ class BuddyBLE:
             await self.on_message(obj)
         except Exception:  # noqa: BLE001
             log.exception("on_message handler crashed")
+
+
+def _utf8_safe_chunks(data: bytes, max_size: int) -> list[bytes]:
+    """Split UTF-8 bytes without ending a chunk inside a codepoint.
+
+    The firmware consumes each BLE write independently, so a raw byte slice that
+    ends between the bytes of a Chinese character can render as mojibake. The
+    input comes from protocol.encode(), so it is valid UTF-8; we only need to
+    back up from continuation bytes at the proposed boundary.
+    """
+    if max_size <= 0:
+        raise ValueError("max_size must be positive")
+
+    chunks: list[bytes] = []
+    offset = 0
+    while offset < len(data):
+        end = min(offset + max_size, len(data))
+        if end < len(data):
+            safe_end = end
+            while safe_end > offset and _is_utf8_continuation(data[safe_end]):
+                safe_end -= 1
+            if safe_end > offset:
+                end = safe_end
+            else:
+                end = min(offset + _utf8_codepoint_size(data[offset]), len(data))
+        chunks.append(data[offset:end])
+        offset = end
+    return chunks
+
+
+def _is_utf8_continuation(byte: int) -> bool:
+    return (byte & 0b1100_0000) == 0b1000_0000
+
+
+def _utf8_codepoint_size(lead_byte: int) -> int:
+    if (lead_byte & 0b1000_0000) == 0:
+        return 1
+    if (lead_byte & 0b1110_0000) == 0b1100_0000:
+        return 2
+    if (lead_byte & 0b1111_0000) == 0b1110_0000:
+        return 3
+    if (lead_byte & 0b1111_1000) == 0b1111_0000:
+        return 4
+    return 1
