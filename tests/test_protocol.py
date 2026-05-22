@@ -1,3 +1,4 @@
+
 from cc_buddy_bridge.ble import _utf8_safe_chunks
 from cc_buddy_bridge.protocol import (
     LineAssembler,
@@ -95,10 +96,6 @@ def test_encode_terminates_with_newline():
 
 
 def test_utf8_safe_chunks_do_not_split_cjk_at_boundary():
-    """Regression: the BLE write path used to truncate mid-codepoint when the
-    chunk boundary landed inside a multi-byte UTF-8 sequence, which produced
-    garbled CJK on the stick (README quirk #1). _utf8_safe_chunks must back
-    the split off to a codepoint boundary."""
     data = encode({"msg": "ab你好cd"})
     first_chinese_byte = data.index("你".encode("utf-8"))
     max_size = first_chinese_byte + 1
@@ -111,8 +108,6 @@ def test_utf8_safe_chunks_do_not_split_cjk_at_boundary():
 
 
 def test_utf8_safe_chunks_keeps_codepoint_when_max_size_is_tiny():
-    """A single CJK codepoint is 3 bytes in UTF-8. If max_size is smaller than
-    one codepoint we must NOT split it — emit it whole even if it overflows."""
     data = "你".encode("utf-8")
 
     chunks = _utf8_safe_chunks(data, 1)
@@ -154,7 +149,7 @@ def test_sanitize_preserves_cjk():
 
 
 def test_sanitize_preserves_bmp_symbols():
-    # BMP symbols (U+0000-U+FFFF) are renderable with the new font.
+    # BMP symbols (U+0000–U+FFFF) are renderable with the new font.
     out = sanitize_for_stick("› done ✓")
     assert "›" in out
     assert "✓" in out

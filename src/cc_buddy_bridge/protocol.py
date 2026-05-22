@@ -64,7 +64,7 @@ def build_heartbeat(state: State, msg: Optional[str] = None) -> dict[str, Any]:
         snapshot["prompt"] = {
             "id": pending.tool_use_id,  # tool_use_id is ASCII by construction
             "tool": sanitize_for_stick(pending.tool_name),
-            "hint": sanitize_for_stick(_truncate_utf8_bytes(pending.hint, 60)),
+            "hint": sanitize_for_stick(truncate_utf8_bytes(pending.hint, 60)),
         }
     return snapshot
 
@@ -151,6 +151,7 @@ def sanitize_for_stick(text: str) -> str:
       - C0/C1 control characters (except tab) — no glyph, undefined behaviour
       - Supplementary-plane codepoints (U+10000+) such as emoji — font table
         only covers BMP; these would still cause an out-of-range index fault
+      - Lone surrogates (U+D800–U+DFFF) — invalid as standalone codepoints
     """
     if not text:
         return text
@@ -174,10 +175,10 @@ def _format_entry(at: float, text: str) -> str:
     # Format: "HH:MM text" — REFERENCE.md shows "10:42 git push".
     hhmm = datetime.fromtimestamp(at).strftime("%H:%M")
     text = text.replace("\n", " ").strip()
-    return f"{hhmm} {_truncate_utf8_bytes(text, ENTRY_MAX_BYTES)}"
+    return f"{hhmm} {truncate_utf8_bytes(text, ENTRY_MAX_BYTES)}"
 
 
-def _truncate_utf8_bytes(text: str, max_bytes: int) -> str:
+def truncate_utf8_bytes(text: str, max_bytes: int) -> str:
     """Truncate text so its UTF-8 encoding fits within max_bytes, appending '…' if cut.
 
     Truncates at a codepoint boundary so no Chinese character is split.

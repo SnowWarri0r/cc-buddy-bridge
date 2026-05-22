@@ -5,20 +5,29 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from pathlib import Path
 from typing import Any, Optional
 
+from .audit import AuditLog
 from .ble import BuddyBLE
 from .ipc import IPCServer
 from .jsonl_tailer import JSONLTailer
 from .matchers import MatcherConfig, classify_command
 from .matchers import load_config as load_matcher_config
 from .protocol import (
+    ENTRY_MAX_BYTES,
     HEARTBEAT_KEEPALIVE,
     build_heartbeat,
     build_time_sync,
+    truncate_utf8_bytes,
 )
 from .state import State
 from .version_check import check as version_check
+
+# Entry text is prefixed with a 2-byte marker ("> ", "@ ", "+ ") before being
+# stored. Budget the user-supplied portion so the full entry stays within the
+# firmware's line buffer without _format_entry needing to re-truncate.
+_ENTRY_PAYLOAD_MAX_BYTES = ENTRY_MAX_BYTES - 2
 
 log = logging.getLogger(__name__)
 
@@ -38,7 +47,7 @@ class Daemon:
         matchers: Optional[MatcherConfig] = None,
     ) -> None:
         self.state = State()
-        self.ipc = IPCServer(self._handle_ipc, socket_path=socket_path)
+        self.ipc = IPCServer(self._handle_ipc, socket_path=socket_path) if socket_path else IPCServer(self._handle_ipc)
         self.ble = BuddyBLE(
             on_message=self._handle_ble,
             name_prefix=device_name_prefix,
@@ -46,6 +55,8 @@ class Daemon:
         )
         self.jsonl = JSONLTailer(self._on_tokens, on_assistant_text=self._on_assistant_text)
         self.matchers = matchers if matchers is not None else load_matcher_config()
+        # Per-decision append-only log; see audit.py
+        self.audit = AuditLog()
         # tool_use_id → Future resolving to "allow" | "deny"
         self._permission_futures: dict[str, asyncio.Future[str]] = {}
         # transcript_path → hash of the last assistant content we emitted as an
@@ -74,6 +85,7 @@ class Daemon:
     # ---- entry ----
 
     async def run(self) -> None:
+        _log_permission_config_summary(self.matchers)
         await self.ipc.start()
         tasks = [
             asyncio.create_task(self.ipc.serve_forever(), name="ipc"),
@@ -190,6 +202,11 @@ class Daemon:
 
     async def _handle_ipc(self, req: dict[str, Any]) -> dict[str, Any]:
         evt = req.get("evt")
+        # Drop pretooluse from the trace: it has its own dedicated INFO log,
+        # and the volume would drown out everything else. get_state is the
+        # hud polling — also too chatty to be useful here.
+        if evt not in ("pretooluse", "get_state"):
+            log.info("ipc evt=%r session=%s", evt, (req.get("session_id") or "?")[:8])
         if evt == "session_start":
             self.state.session_start(
                 req["session_id"],
@@ -216,7 +233,7 @@ class Daemon:
             self.state.turn_begin(session_id)
             prompt = req.get("prompt")
             if isinstance(prompt, str) and prompt:
-                self.state.add_entry(f"> {prompt[:60]}")
+                self.state.add_entry(f"> {truncate_utf8_bytes(prompt, _ENTRY_PAYLOAD_MAX_BYTES)}")
             await self._push_heartbeat()
             return {"ok": True}
 
@@ -239,16 +256,11 @@ class Daemon:
             # correct before anything is pushed.
             CELEBRATE_SECS = 5.0
             self.state.pulse_completed(duration_secs=CELEBRATE_SECS)
-            # Capture the subtitle now, while entries are stable, so the
-            # background task doesn't race against state mutations.
-            subtitle = self.state.entries[0].text[:80] if self.state.entries else ""
-            # Kick off the BLE push + notification in the background so this
-            # coroutine can return {"ok": True} immediately — the Stop hook
-            # caller must not block on _push_heartbeat(force=True) or it
-            # surfaces as ETIMEDOUT in the plugin's spawnSync call.
-            asyncio.create_task(
-                self._turn_end_side_effects(session_id, subtitle, CELEBRATE_SECS)
-            )
+            # Kick off the BLE push in the background so this coroutine can
+            # return {"ok": True} immediately — the Stop hook caller must not
+            # block on _push_heartbeat(force=True) or it surfaces as ETIMEDOUT
+            # in the plugin's spawnSync call.
+            asyncio.create_task(self._turn_end_side_effects(CELEBRATE_SECS))
             return {"ok": True}
 
         if evt == "pretooluse":
@@ -326,14 +338,19 @@ class Daemon:
         # always_ask → force stick prompt even if Claude Code would auto-approve.
         # default    → no decision, let Claude Code's native permission flow run.
         decision_class = classify_command(hint, self.matchers)
+        audit_kwargs = dict(
+            session_id=session_id, tool_name=tool_name, hint=hint, matcher=decision_class,
+        )
         if decision_class == "allow":
             log.info("pretooluse for %s (%s): auto_allow match → allow", tool_name, hint[:60])
+            self.audit.record(**audit_kwargs, decision="allow", source="auto_allow")
             return {"ok": True, "decision": "allow"}
 
         # If BLE isn't connected, skip the round-trip and return no decision so
         # Claude Code's normal flow runs (respects user's auto/allow settings).
         if not self.ble.connected:
             log.info("pretooluse for %s: ble not connected, deferring to default flow", tool_name)
+            self.audit.record(**audit_kwargs, decision=None, source="ble_disconnected")
             return {"ok": True}
 
         # Unknown commands don't force a button press — defer to Claude Code's
@@ -341,6 +358,7 @@ class Daemon:
         # Only always_ask patterns surface on the stick.
         if decision_class == "default":
             log.info("pretooluse for %s (%s): no matcher → defer to default", tool_name, hint[:60])
+            self.audit.record(**audit_kwargs, decision=None, source="defer")
             return {"ok": True}
 
         log.info(
@@ -350,6 +368,7 @@ class Daemon:
         pending = self.state.permission_pending(session_id, tool_use_id, tool_name, hint)
         fut: asyncio.Future[str] = asyncio.get_running_loop().create_future()
         self._permission_futures[tool_use_id] = fut
+        source = "stick"
         try:
             await self._push_heartbeat(force=True)
             try:
@@ -366,10 +385,14 @@ class Daemon:
                     tool_use_id, tool_name, elapsed,
                 )
                 decision = "ask"
+                source = "timeout"
         finally:
             self._permission_futures.pop(tool_use_id, None)
             self.state.permission_resolved(tool_use_id)
             await self._push_heartbeat()
+        self.audit.record(
+            **audit_kwargs, decision=decision, source=source, elapsed_s=elapsed,
+        )
         return {"ok": True, "decision": decision}
 
     # ---- BLE handler ----
@@ -478,39 +501,27 @@ class Daemon:
         message). Emitting here beats the Stop hook, so the stick receives
         the '@ ...' entry while the user is still looking at the terminal —
         before auto-off kicks in."""
-        self.state.add_entry(f"@ {text[:70]}")
+        self.state.add_entry(f"@ {truncate_utf8_bytes(text, _ENTRY_PAYLOAD_MAX_BYTES)}")
         log.info("tailer: new assistant text → entry added (state.entries=%d)",
                  len(self.state.entries))
         await self._push_heartbeat(force=True)
 
-    async def _turn_end_side_effects(
-        self, session_id: str, subtitle: str, celebrate_secs: float
-    ) -> None:
+    async def _turn_end_side_effects(self, celebrate_secs: float) -> None:
         """Post-response work for a turn_end event, run as a background task.
 
-        Ordering mirrors what the inline handler used to do, but now executes
-        *after* the IPC ``{"ok": True}`` reply has already been sent, so the
-        Stop hook's spawnSync call never waits on a BLE write or OS notification.
+        Runs *after* the IPC ``{"ok": True}`` reply has been sent, so the Stop
+        hook's spawnSync call never waits on a BLE write.
 
         1. Force-push the heartbeat carrying ``completed=true`` so the stick's
            celebrate animation fires within ~50 ms of the turn ending.
         2. Schedule a follow-up push at pulse end so ``completed`` flips back
            to false on time rather than waiting for the next keepalive.
-        3. Fire the desktop notification (macOS banner + sound, Windows chime).
         """
         try:
-            # 1. Force heartbeat — animation timing depends on this being fast.
             await self._push_heartbeat(force=True)
         except Exception:  # noqa: BLE001
             log.exception("turn_end side effects: _push_heartbeat(force=True) failed")
-        # 2. Schedule pulse-end heartbeat regardless of whether step 1 succeeded.
         asyncio.create_task(self._heartbeat_after(celebrate_secs + 0.1))
-        # 3. Desktop notification — errors must not propagate back to the IPC loop.
-        try:
-            from .notifier import notify_turn_complete
-            notify_turn_complete(subtitle=subtitle, session_id=session_id)
-        except Exception:  # noqa: BLE001
-            log.exception("turn_end side effects: notify_turn_complete failed")
 
     async def _heartbeat_after(self, delay: float) -> None:
         """Schedule one heartbeat push after ``delay`` seconds. Used by the
@@ -611,7 +622,7 @@ class Daemon:
         if text:
             log.info("turn end: adding entry '@ %s...' (state.entries len before=%d)",
                      text[:30], len(self.state.entries))
-            self.state.add_entry(f"@ {text[:70]}")
+            self.state.add_entry(f"@ {truncate_utf8_bytes(text, _ENTRY_PAYLOAD_MAX_BYTES)}")
             await self._push_heartbeat(force=True)
             if content_key is not None:
                 self._last_emitted_turn_key[transcript_path] = content_key
@@ -630,3 +641,57 @@ def _first_text_block(content: list) -> str:
             if isinstance(text, str) and text.strip():
                 return text.strip()
     return ""
+
+
+def _log_permission_config_summary(matchers: MatcherConfig) -> None:
+    """One-shot log at startup: how does the matcher interact with Claude Code's
+    own permissions config? Flags the two most confusing misalignments:
+
+    1. defaultMode == 'bypassPermissions' AND matcher is non-strict — the stick
+       only gates always_ask patterns; everything else is silently bypassed.
+    2. matcher.strict but defaultMode unsuitable — strict mode wants
+       bypassPermissions, otherwise unmatched commands still go through Claude
+       Code's normal prompt UI.
+    """
+    import json
+    settings_path = Path.home() / ".claude" / "settings.json"
+    default_mode: Optional[str] = None
+    ask_count = 0
+    if settings_path.exists():
+        try:
+            with settings_path.open() as f:
+                data = json.load(f)
+            perms = data.get("permissions") or {}
+            default_mode = perms.get("defaultMode")
+            ask_count = len(perms.get("ask") or [])
+        except (OSError, ValueError) as e:
+            log.debug("could not read settings.json for permission summary: %s", e)
+
+    matcher_summary = (
+        f"matcher: strict={matchers.strict} "
+        f"auto_allow={len(matchers.auto_allow)} "
+        f"always_ask={len(matchers.always_ask)}"
+    )
+    log.info("%s", matcher_summary)
+    log.info(
+        "settings.json: permissions.defaultMode=%r ask=%d",
+        default_mode or "(unset)", ask_count,
+    )
+
+    if default_mode == "bypassPermissions" and not matchers.strict:
+        log.warning(
+            "permissions.defaultMode='bypassPermissions' + matcher.strict=false: "
+            "the stick gates *only* always_ask patterns (%d defined); everything "
+            "else is auto-approved without any human-in-the-loop. To put the "
+            "stick in front of every un-vetted command, set `strict = true` in "
+            "your matchers.toml.",
+            len(matchers.always_ask),
+        )
+    elif matchers.strict and default_mode not in ("bypassPermissions", None):
+        log.warning(
+            "matcher.strict=true but permissions.defaultMode=%r: unmatched "
+            "commands will route to the stick AND Claude Code may still surface "
+            "its own terminal prompt depending on the mode. Strict mode is "
+            "designed to pair with defaultMode='bypassPermissions'.",
+            default_mode,
+        )
