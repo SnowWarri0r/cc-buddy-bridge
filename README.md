@@ -28,6 +28,7 @@ you approve or deny right from the stick's buttons.
 - **One-command install + autostart** — `cc-buddy-bridge install --service` picks the right backend per OS: launchd (macOS), systemd user unit (Linux), Task Scheduler (Windows).
 - **Custom GIF characters** — `cc-buddy-bridge push-character ./pack/` uploads a folder of frames over BLE with chunked flow control.
 - **Release notifications + self-update** — daemon pings GitHub releases once a day; hud renders `↑ vX.Y.Z` when a newer tag exists. `cc-buddy-bridge check-update` for a one-off check, `cc-buddy-bridge update` to actually pull + reinstall + restart the daemon. Opt out of polling with `CC_BUDDY_BRIDGE_NO_UPDATE_CHECK=1`.
+- **Optional CJK display on the stick** — fork-only firmware variants render Simplified Chinese (and soon Traditional Chinese / Japanese) at 12×12 px using [Fusion Pixel Font](https://github.com/TakWolf/fusion-pixel-font) (OFL). Bridge auto-switches its wire codec when you set `CC_BUDDY_CJK_TARGET=zh-CN`. See [CJK display on the stick](#cjk-display-on-the-stick-optional).
 
 ## How it works
 
@@ -396,6 +397,90 @@ Firmware update detection is out of scope for now — the stick's status ack
 doesn't carry a firmware version, and upstream
 [anthropics/claude-desktop-buddy](https://github.com/anthropics/claude-desktop-buddy)
 has no releases or tags to compare against.
+
+## CJK display on the stick (optional)
+
+Stock firmware ships an ASCII-only 5×7 font — Chinese/Japanese/Korean
+content in prompts and responses shows up as rows of `?` on the device
+([quirk #1](#1-multi-byte-utf-8-strands-get-truncated-mid-character-on-the-ble-link)).
+Upstream's CONTRIBUTING explicitly declines new features, so adding a CJK
+font *and* getting it merged isn't realistic. Instead, this is implemented
+as a **fork-only firmware build** that you flash yourself if you want
+on-device CJK rendering. Stock-firmware users are unaffected — the bridge
+keeps its conservative ASCII sanitizer until you tell it otherwise.
+
+### Status
+
+| Target | Firmware build | Bridge codec | Status |
+| --- | --- | --- | --- |
+| **Simplified Chinese (zh-CN)** | `m5stickc-plus-cjk-zh-cn` | `gbk` | ✅ Ready — GB2312 zones 1-55 (symbols + Level 1 hanzi), ~4300 glyphs |
+| Traditional Chinese (zh-TW) | `m5stickc-plus-cjk-zh-tw` | `big5` | 🚧 Planned — bridge codec wired; firmware build still uses Simplified glyphs |
+| Japanese (ja) | `m5stickc-plus-cjk-ja` | `shift_jis` | 🚧 Planned — same |
+
+### How to enable (Simplified Chinese)
+
+1. **Flash the fork's CJK firmware variant.** Clone
+   [SnowWarri0r/claude-desktop-buddy](https://github.com/SnowWarri0r/claude-desktop-buddy),
+   check out `feat/cjk-display-zh-cn`, and run
+   `pio run -e m5stickc-plus-cjk-zh-cn -t upload --upload-port /dev/cu.usbserial-...`
+   (substitute your stick's serial path). The CJK build adds ~120 KB to
+   the firmware binary; spiffs partition (where GIF character packs live)
+   is untouched.
+
+2. **Tell the bridge to send GBK bytes.** Add `CC_BUDDY_CJK_TARGET=zh-CN`
+   to the daemon's environment. On macOS:
+
+   ```bash
+   plutil -insert EnvironmentVariables.CC_BUDDY_CJK_TARGET -string zh-CN \
+       ~/Library/LaunchAgents/com.github.cc-buddy-bridge.daemon.plist
+   launchctl bootout gui/$(id -u)/com.github.cc-buddy-bridge.daemon
+   launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.github.cc-buddy-bridge.daemon.plist
+   ```
+
+   On Linux: edit `~/.config/systemd/user/cc-buddy-bridge.service`, add
+   `Environment=CC_BUDDY_CJK_TARGET=zh-CN` under `[Service]`, then
+   `systemctl --user daemon-reload && systemctl --user restart cc-buddy-bridge.service`.
+
+3. **Verify.** The daemon log prints `cjk firmware target=zh-CN, wire codec=gbk`
+   at startup. Your next assistant turn with Chinese content should render
+   the actual characters on the stick instead of `?`s.
+
+To go back to stock behaviour: remove the env var and re-flash the default
+`m5stickc-plus` build.
+
+### What changes behind the scenes
+
+- **Bridge wire format.** `sanitize_for_stick` switches from ASCII-only to
+  GBK-encodable; `encode()` builds the heartbeat JSON manually with string
+  values encoded as GBK bytes between quotes (keys, numbers, structural
+  punctuation stay ASCII). ArduinoJson 7 on the stick accepts this — it
+  doesn't validate UTF-8 inside string values.
+- **Firmware rendering.** A sprite-aware mixed-script renderer
+  (`cjk_render.cpp`) walks each byte: ASCII (< 0x80) draws a 6×12 glyph
+  from `Fonts/ASC12.h`; GBK pairs (both bytes 0xA1-0xFE) draw a 12×12
+  glyph from `Fonts/GB2312_L1.h`. `drawHUD` runs the line through a
+  pixel- and GBK-aware wrap so long entries break cleanly instead of
+  clipping at the right edge.
+
+### Font credit
+
+The CJK firmware variants use [Fusion Pixel Font](https://github.com/TakWolf/fusion-pixel-font)
+12px monospaced (zh\_hans + Latin), released under the **SIL Open Font
+License 1.1**. The OFL text plus per-source attributions for Ark Pixel,
+Cubic 11, and Galmuri (which Fusion Pixel merges from) ship in the
+firmware fork under `src/Fonts/`. Thank you @TakWolf for making this
+available.
+
+### Caveats
+
+- Emoji (supplementary-plane codepoints) are not in any of the three
+  byte-pair encodings; the sanitizer replaces them with `?` even in CJK
+  mode.
+- Level-2 hanzi (GB2312 zones 56-87, rarer characters) aren't shipped to
+  save flash; they fall back to `??` at render time. ~99% of daily
+  Mandarin use is in Level 1.
+- The firmware variant is a downstream fork — there's no auto-update
+  story. Re-build & re-flash manually when you pull new firmware changes.
 
 ## Requirements
 
