@@ -24,8 +24,10 @@ HEARTBEAT_KEEPALIVE = 10.0
 # Size cap for turn events per REFERENCE.md (4KB after UTF-8 encoding).
 TURN_EVENT_MAX_BYTES = 4096
 
-# Max chars per entry — keep the stick's line buffer happy.
-ENTRY_TEXT_MAX = 80
+# Max UTF-8 bytes for the text portion of each entry (before the "HH:MM " prefix).
+# CJK characters are 3 bytes each, so 60 bytes ≈ 20 CJK chars or 60 ASCII chars.
+# Enforced in bytes (not chars) so the firmware's line buffer never overflows.
+ENTRY_MAX_BYTES = 60
 
 # Replacement character used when we strip a codepoint the stick can't render.
 # Keep it to 1 ASCII char so it doesn't blow up byte budgets or fall into the
@@ -62,7 +64,7 @@ def build_heartbeat(state: State, msg: Optional[str] = None) -> dict[str, Any]:
         snapshot["prompt"] = {
             "id": pending.tool_use_id,  # tool_use_id is ASCII by construction
             "tool": sanitize_for_stick(pending.tool_name),
-            "hint": sanitize_for_stick(pending.hint[:120]),
+            "hint": sanitize_for_stick(truncate_utf8_bytes(pending.hint, 60)),
         }
     return snapshot
 
@@ -141,36 +143,29 @@ class LineAssembler:
 # ---- sanitization ----
 
 def sanitize_for_stick(text: str) -> str:
-    """Strip anything the stick's bitmap font can't safely render.
+    """Strip characters the stick's font can't safely render.
 
-    Initially we thought we only had to drop supplementary-plane codepoints
-    (emojis), because BMP chars like CJK "just rendered as empty boxes".
-    Empirical testing (2026-04-22) showed that's wrong: pushing entries
-    containing CJK UTF-8 bytes (``0xE9 0x87 0x8D`` for "重" etc.) reliably
-    disconnected the stick ~1s after the heartbeat write.
-
-    Hypothesis: the firmware's Adafruit-GFX bitmap font table is ASCII-only,
-    so a multi-byte leading byte (0x80–0xFF) becomes an out-of-range index —
-    garbage reads in some paths, a hard fault in others. Either way, anything
-    non-ASCII is a poison pill.
-
-    Policy: keep only ASCII printable (``0x20``–``0x7E``) plus tab. Strip
-    everything else — control chars, high-bit bytes, CJK, fullwidth punct,
-    emojis — to '?'. Stable takes priority over expressiveness; a Chinese
-    entry becomes a row of '?'s which at least tells the viewer "something
-    happened".
+    Firmware now ships a CJK-capable font, so BMP characters (U+0000–U+FFFF)
+    including CJK unified ideographs, fullwidth punctuation, and kana are all
+    renderable. We still strip:
+      - C0/C1 control characters (except tab) — no glyph, undefined behaviour
+      - Supplementary-plane codepoints (U+10000+) such as emoji — font table
+        only covers BMP; these would still cause an out-of-range index fault
+      - Lone surrogates (U+D800–U+DFFF) — invalid as standalone codepoints
     """
     if not text:
         return text
     out = []
     for ch in text:
         cp = ord(ch)
-        if 0x20 <= cp <= 0x7E:
-            out.append(ch)
-        elif ch == "\t":
-            out.append(ch)
-        else:
+        if cp > 0xFFFF:
             out.append(UNRENDERABLE_REPLACEMENT)
+        elif 0xD800 <= cp <= 0xDFFF:
+            out.append(UNRENDERABLE_REPLACEMENT)
+        elif (cp < 0x20 and ch != "\t") or cp == 0x7F or 0x80 <= cp <= 0x9F:
+            out.append(UNRENDERABLE_REPLACEMENT)
+        else:
+            out.append(ch)
     return "".join(out)
 
 
@@ -180,9 +175,28 @@ def _format_entry(at: float, text: str) -> str:
     # Format: "HH:MM text" — REFERENCE.md shows "10:42 git push".
     hhmm = datetime.fromtimestamp(at).strftime("%H:%M")
     text = text.replace("\n", " ").strip()
-    if len(text) > ENTRY_TEXT_MAX:
-        text = text[: ENTRY_TEXT_MAX - 1] + "…"
-    return f"{hhmm} {text}"
+    return f"{hhmm} {truncate_utf8_bytes(text, ENTRY_MAX_BYTES)}"
+
+
+def truncate_utf8_bytes(text: str, max_bytes: int) -> str:
+    """Truncate text so its UTF-8 encoding fits within max_bytes, appending '…' if cut.
+
+    Truncates at a codepoint boundary so no Chinese character is split.
+    '…' is 3 bytes; budget is reduced accordingly before slicing.
+    """
+    encoded = text.encode("utf-8")
+    if len(encoded) <= max_bytes:
+        return text
+    budget = max_bytes - 3  # reserve space for '…' (3 UTF-8 bytes)
+    if budget <= 0:
+        return "…"
+    end = budget
+    # If the byte right after the cut is a continuation byte (10xxxxxx), the
+    # boundary falls mid-codepoint. Walk back to the lead byte of that
+    # incomplete sequence and exclude the whole codepoint.
+    while end > 0 and (encoded[end] & 0b1100_0000) == 0b1000_0000:
+        end -= 1
+    return encoded[:end].decode("utf-8") + "…"
 
 
 def _default_msg(state: State, pending) -> str:

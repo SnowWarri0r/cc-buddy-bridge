@@ -1,25 +1,20 @@
 """One-line status renderer for Claude Code's ``statusLine`` setting.
 
-Connects to the running daemon's IPC socket, asks for a snapshot, and
+Connects to the running daemon's local IPC channel, asks for a snapshot, and
 prints a compact line. Designed to complement claude-hud rather than
 replace it: we focus on the stick-specific signals (BLE connection,
 encryption, battery, pending button prompts) that Claude Code itself
 doesn't know about.
-
-On Unix: connects via Unix domain socket
-On Windows: reads port from file and connects via TCP
 """
 
 from __future__ import annotations
 
 import json
 import select
-import socket
 import sys
-from pathlib import Path
 from typing import Any, Optional
 
-from .ipc import DEFAULT_SOCKET_PATH
+from .ipc import make_transport
 
 # Bar rendering. Keep the width compact — claude-hud already fills most of
 # the statusLine, and we need to fit next to it.
@@ -70,21 +65,11 @@ def _battery_segment(pct: Optional[int], *, ascii_only: bool) -> Optional[str]:
     return f"{icon} {color}{bar}{_ANSI_RESET} {pct}%"
 
 
-def _query_state(socket_path: str, timeout: float = 0.5) -> Optional[dict[str, Any]]:
+def _query_state(socket_path: Optional[str], timeout: float = 0.5) -> Optional[dict[str, Any]]:
     """Best-effort: return the daemon's state dict or None if anything fails."""
+    s = None
     try:
-        if sys.platform == "win32":
-            # Windows: read port from file and connect via TCP
-            port = int(Path(socket_path).read_text().strip())
-            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.settimeout(timeout)
-            s.connect(("127.0.0.1", port))
-        else:
-            # Unix: connect via Unix domain socket
-            s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            s.settimeout(timeout)
-            s.connect(socket_path)
-
+        s = make_transport(socket_path).sync_connect(timeout)
         s.sendall(b'{"evt":"get_state"}\n')
         buf = bytearray()
         while True:
@@ -94,9 +79,14 @@ def _query_state(socket_path: str, timeout: float = 0.5) -> Optional[dict[str, A
             buf.extend(chunk)
             if b"\n" in buf:
                 break
-        s.close()
-    except (OSError, socket.timeout, ValueError):
+    except (OSError, ValueError):
         return None
+    finally:
+        if s is not None:
+            try:
+                s.close()
+            except OSError:
+                pass
     line = bytes(buf).split(b"\n", 1)[0]
     if not line:
         return None
@@ -188,7 +178,6 @@ def run(ascii_only: bool = False, socket_path: Optional[str] = None) -> int:
     except (OSError, ValueError):
         pass
 
-    path = socket_path or DEFAULT_SOCKET_PATH
-    state = _query_state(path)
+    state = _query_state(socket_path)
     sys.stdout.write(format_line(state, ascii_only=ascii_only) + "\n")
     return 0
