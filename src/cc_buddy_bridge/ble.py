@@ -66,11 +66,17 @@ class BuddyBLE:
     async def wait_connected(self) -> None:
         await self._connected_evt.wait()
 
-    async def send(self, obj: dict[str, Any]) -> bool:
-        """Write a newline-terminated JSON object to the stick's RX. Returns True on success."""
+    async def send(self, obj: dict[str, Any], codec: Optional[str] = None) -> bool:
+        """Write a newline-terminated JSON object to the stick's RX. Returns True on success.
+
+        ``codec`` is passed through to ``protocol.encode``. Default (``None``)
+        means UTF-8 JSON; ``'gbk'`` / ``'big5'`` / ``'shift_jis'`` switch the
+        wire to the matching CJK firmware variant's expected byte encoding
+        (see protocol.CJK_CODECS).
+        """
         if not self.connected or self._client is None:
             return False
-        data = encode(obj)
+        data = encode(obj, codec=codec)
         try:
             async with self._send_lock:
                 # ATT Write Without Response payload = MTU - 3 bytes overhead.
