@@ -5,14 +5,12 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
-import os
 import signal
-import socket
 import sys
 
 from . import __version__
 from .daemon import Daemon
-from .ipc import DEFAULT_SOCKET_PATH
+from .ipc import make_transport
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -21,7 +19,7 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="cmd")
 
     p_daemon = sub.add_parser("daemon", help="Run the bridge daemon (connects to BLE device, serves hooks)")
-    p_daemon.add_argument("--socket", default=None, help="Unix socket path (default /tmp/cc-buddy-bridge.sock)")
+    p_daemon.add_argument("--socket", default=None, help="IPC path or host:port override")
     p_daemon.add_argument("--device-name", default="Claude", help="BLE name prefix to match (default: Claude)")
     p_daemon.add_argument("--device-address", default=None, help="BLE address to connect to (skips scan)")
     p_daemon.add_argument("--log-level", default="INFO")
@@ -44,7 +42,7 @@ def main(argv: list[str] | None = None) -> int:
         help="Print a one-line stick status summary (stdout; designed for Claude Code's statusLine)",
     )
     p_hud.add_argument("--ascii", action="store_true", help="ASCII-only output (no emoji)")
-    p_hud.add_argument("--socket", default=None, help="Unix socket path override")
+    p_hud.add_argument("--socket", default=None, help="IPC path or host:port override")
 
     sub.add_parser(
         "unpair",
@@ -144,14 +142,16 @@ def _run_daemon(args: argparse.Namespace) -> int:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
 
-    # Refuse to start if another daemon is already listening on this socket.
-    # A stale socket (file exists but nobody is accepting) is safe to remove
-    # and proceed. This prevents last night's "two daemons competing for the
-    # BLE connection" footgun.
-    socket_path = args.socket or DEFAULT_SOCKET_PATH
-    if _socket_in_use(socket_path):
+    # Refuse to start if another daemon is already listening on this IPC
+    # address. A stale Unix socket is safe to remove and proceed.
+    try:
+        transport = make_transport(args.socket)
+    except ValueError as e:
+        print(f"cc-buddy-bridge: invalid IPC address: {e}", file=sys.stderr)
+        return 2
+    if transport.is_in_use():
         print(
-            f"cc-buddy-bridge: another daemon is already listening at {socket_path}.\n"
+            f"cc-buddy-bridge: another daemon is already listening at {transport.address}.\n"
             f"  Stop it first, or pass --socket to use a different path.",
             file=sys.stderr,
         )
@@ -225,74 +225,15 @@ def _run_unpair() -> int:
         print(f"cc-buddy-bridge: unpair failed ({err})", file=sys.stderr)
         return 2
 
-    print("sent cmd:unpair to the stick — its stored bond is cleared.")
+    print("sent cmd:unpair to the stick; its stored bond is cleared.")
     print("")
-    print("Next: open macOS System Settings → Bluetooth → Claude-5C66 → ⓘ →")
+    print("Next: open macOS System Settings > Bluetooth > Claude-5C66 > info")
     print("'Forget This Device' to purge the cached LTK. Then the next reconnect")
     print("will prompt for a fresh 6-digit passkey (displayed on the stick).")
     print("")
     print("Watch `tail -f ~/Library/Logs/cc-buddy-bridge.log` for the moment of truth:")
     print("  \"stick link: ENCRYPTED (was None)\"")
     return 0
-
-
-def _socket_in_use(path: str) -> bool:
-    """True iff a process is actively accepting on ``path``.
-
-    On Unix: checks Unix socket file
-    On Windows: reads port from file and checks TCP socket
-    """
-    if not os.path.exists(path):
-        return False
-
-    if sys.platform == "win32":
-        # Windows: path is a port file, read port and check TCP socket
-        try:
-            from pathlib import Path
-            port = int(Path(path).read_text().strip())
-            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.settimeout(0.5)
-            try:
-                s.connect(("127.0.0.1", port))
-                return True
-            except (ConnectionRefusedError, OSError):
-                # Stale port file
-                try:
-                    os.unlink(path)
-                except OSError:
-                    pass
-                return False
-            finally:
-                try:
-                    s.close()
-                except OSError:
-                    pass
-        except (ValueError, OSError):
-            return False
-    else:
-        # Unix: check Unix socket
-        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        s.settimeout(0.5)
-        try:
-            s.connect(path)
-        except (ConnectionRefusedError, FileNotFoundError):
-            # Stale socket file — clean up and proceed.
-            try:
-                os.unlink(path)
-            except OSError:
-                pass
-            return False
-        except OSError:
-            # Some other error (permissions, socket unreadable). Be conservative
-            # and treat as in-use so we don't clobber something.
-            return True
-        else:
-            return True
-        finally:
-            try:
-                s.close()
-            except OSError:
-                pass
 
 
 if __name__ == "__main__":

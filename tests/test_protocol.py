@@ -1,4 +1,5 @@
 
+from cc_buddy_bridge.ble import _utf8_safe_chunks
 from cc_buddy_bridge.protocol import (
     LineAssembler,
     build_heartbeat,
@@ -94,6 +95,26 @@ def test_encode_terminates_with_newline():
     assert buf.endswith(b"\n")
 
 
+def test_utf8_safe_chunks_do_not_split_cjk_at_boundary():
+    data = encode({"msg": "ab你好cd"})
+    first_chinese_byte = data.index("你".encode("utf-8"))
+    max_size = first_chinese_byte + 1
+
+    chunks = _utf8_safe_chunks(data, max_size)
+
+    assert b"".join(chunks) == data
+    assert all(chunk.decode("utf-8") for chunk in chunks)
+    assert all(len(chunk) <= max_size for chunk in chunks)
+
+
+def test_utf8_safe_chunks_keeps_codepoint_when_max_size_is_tiny():
+    data = "你".encode("utf-8")
+
+    chunks = _utf8_safe_chunks(data, 1)
+
+    assert chunks == [data]
+
+
 def test_line_assembler_fragments():
     la = LineAssembler()
     out = la.feed(b'{"a":1}\n{"b":')
@@ -120,21 +141,19 @@ def test_sanitize_keeps_ascii():
     assert sanitize_for_stick("hello world 123 !@#") == "hello world 123 !@#"
 
 
-def test_sanitize_strips_cjk():
-    # The firmware's bitmap font is ASCII-only; CJK bytes crash the BLE stack.
+def test_sanitize_preserves_cjk():
+    # Firmware now ships a CJK-capable font; Chinese characters must pass through.
     out = sanitize_for_stick("hello 你好 world")
-    assert "你" not in out and "好" not in out
-    assert "hello " in out and " world" in out
-    # The 2 stripped chars should each become '?' (per-codepoint).
-    assert out.count("?") == 2
+    assert "你" in out and "好" in out
+    assert out == "hello 你好 world"
 
 
-def test_sanitize_strips_bmp_symbols():
-    # Even innocuous BMP symbols like › and ✓ aren't safe — no ASCII glyph.
+def test_sanitize_preserves_bmp_symbols():
+    # BMP symbols (U+0000–U+FFFF) are renderable with the new font.
     out = sanitize_for_stick("› done ✓")
-    assert "›" not in out
-    assert "✓" not in out
-    assert "done" in out
+    assert "›" in out
+    assert "✓" in out
+    assert out == "› done ✓"
 
 
 def test_sanitize_strips_emoji():
@@ -153,6 +172,8 @@ def test_sanitize_strips_multiple_emojis():
 def test_sanitize_strips_newlines_and_control_chars():
     assert "\n" not in sanitize_for_stick("hello\nworld")
     assert "\x00" not in sanitize_for_stick("hello\x00world")
+    assert "\x7f" not in sanitize_for_stick("hello\x7fworld")
+    assert "\x85" not in sanitize_for_stick("hello\x85world")
 
 
 def test_sanitize_preserves_tab():
