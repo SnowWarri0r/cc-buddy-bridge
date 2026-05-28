@@ -24,10 +24,22 @@ HEARTBEAT_KEEPALIVE = 10.0
 # Size cap for turn events per REFERENCE.md (4KB after UTF-8 encoding).
 TURN_EVENT_MAX_BYTES = 4096
 
-# Max UTF-8 bytes for the text portion of each entry (before the "HH:MM " prefix).
-# CJK characters are 3 bytes each, so 60 bytes ≈ 20 CJK chars or 60 ASCII chars.
-# Enforced in bytes (not chars) so the firmware's line buffer never overflows.
-ENTRY_MAX_BYTES = 60
+# Max UTF-8 bytes for the entry payload (already prefixed with "@ " / "> " /
+# "+ " by the daemon — see _ENTRY_PAYLOAD_MAX_BYTES). _format_entry prepends
+# another "HH:MM " (6 bytes ASCII) before sending. Firmware buffer is
+# `tama.lines[i] = char[92]` (see claude-desktop-buddy src/data.h), so the
+# total wire entry must be ≤ 91 bytes + NUL.
+#
+# Budget math (wire bytes, worst case): 84 UTF-8 + 6 prefix = 90 wire bytes.
+# Fits 92-byte buffer with 2-byte safety margin. The ASCII path bounds the
+# budget — pure CJK content in CJK firmware mode compresses 3→2 bytes via
+# SJIS/GBK encoding (so it stays well under), but mixed/ASCII content can
+# hit the budget directly.
+#
+# At 84, CJK content gets ~28 chars per entry (vs 20 at the old 60), and
+# ASCII content gets ~84 (vs 60). Going higher requires either a firmware
+# buffer bump or codec-aware wire-byte truncation; see Phase 4 backlog.
+ENTRY_MAX_BYTES = 84
 
 # Replacement character used when we strip a codepoint the stick can't render.
 # Keep it to 1 ASCII char so it doesn't blow up byte budgets or fall into the
