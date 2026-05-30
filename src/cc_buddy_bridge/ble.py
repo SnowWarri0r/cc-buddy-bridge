@@ -30,7 +30,7 @@ log = logging.getLogger(__name__)
 
 # Default scan parameters.
 DEFAULT_NAME_PREFIX = "Claude"
-SCAN_TIMEOUT_SECS = 10.0
+SCAN_TIMEOUT_SECS = 3.0
 
 # Exponential backoff for reconnection: if the device is resetting or rejecting
 # us, we don't want to hammer it. After each failure we double the wait up to
