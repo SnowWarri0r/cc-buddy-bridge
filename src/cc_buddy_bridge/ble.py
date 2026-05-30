@@ -140,6 +140,7 @@ class BuddyBLE:
                         await asyncio.sleep(1.0)
                     lifetime = time.monotonic() - connect_ts
                     log.info("disconnected after %.1fs", lifetime)
+                    radio_reset_done = False  # allow reset on next scan cycle after disconnect
             except Exception as e:  # noqa: BLE001
                 log.warning("ble connection error: %s", e)
             finally:
