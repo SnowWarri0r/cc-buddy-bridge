@@ -44,7 +44,7 @@ STABLE_CONNECTION_SECS = 30.0
 # callbacks while reporting status=Started. After this many consecutive
 # scan-timeout misses with the radio ON, we programmatically toggle the
 # radio off→on to recover without user intervention.
-RADIO_RESET_AFTER_MISSES = 5
+RADIO_RESET_AFTER_MISSES = 2
 
 # Handler for lines received from the stick (device → daemon).
 IncomingHandler = Callable[[dict[str, Any]], Awaitable[None]]
@@ -107,6 +107,7 @@ class BuddyBLE:
         hammered every 3 seconds."""
         backoff = RECONNECT_BACKOFF_BASE_SECS
         consecutive_misses = 0
+        radio_reset_done = False  # reset once per connection attempt cycle
         while not self._stop.is_set():
             connect_ts: float | None = None
             try:
@@ -115,8 +116,9 @@ class BuddyBLE:
                     consecutive_misses += 1
                     log.info("no buddy device found, retrying in %.1fs (miss #%d)",
                              backoff, consecutive_misses)
-                    if consecutive_misses >= RADIO_RESET_AFTER_MISSES:
+                    if consecutive_misses >= RADIO_RESET_AFTER_MISSES and not radio_reset_done:
                         await self._try_reset_radio()
+                        radio_reset_done = True
                         consecutive_misses = 0
                         backoff = RECONNECT_BACKOFF_BASE_SECS
                     else:
@@ -124,6 +126,7 @@ class BuddyBLE:
                         backoff = min(backoff * 2, RECONNECT_BACKOFF_MAX_SECS)
                     continue
                 consecutive_misses = 0
+                radio_reset_done = False  # clear so next disconnection gets a reset attempt
                 log.info("connecting to %s (%s)", device.name, device.address)
                 async with BleakClient(device) as client:
                     self._client = client
