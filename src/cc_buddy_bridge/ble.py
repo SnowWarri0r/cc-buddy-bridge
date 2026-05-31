@@ -153,6 +153,15 @@ class BuddyBLE:
                     # Hold the connection open until it drops or we're told to stop.
                     while client.is_connected and not self._stop.is_set():
                         await asyncio.sleep(1.0)
+                    # Clear the connected event the instant we observe the drop —
+                    # NOT in the finally below. BleakClient.__aexit__ teardown can
+                    # take a while, and during that window `connected` is already
+                    # False while the event is still set. A consumer that loops on
+                    # wait_connected() (daemon._on_ble_connected) would then wake on
+                    # the stale event, find connected False, and busy-loop with no
+                    # await until teardown finally clears it. Clear it here to close
+                    # that race.
+                    self._connected_evt.clear()
                     lifetime = time.monotonic() - connect_ts
                     log.info("disconnected after %.1fs", lifetime)
                     radio_reset_done = False  # allow reset on next scan cycle after disconnect

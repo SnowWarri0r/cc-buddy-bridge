@@ -228,3 +228,29 @@ def test_reset_rearmed_after_disconnect(monkeypatch):
         f"reset must re-arm after disconnect and fire twice, got {h.reset_calls} "
         "(if 1, radio_reset_done stayed True across the disconnect — the commit-4 bug)"
     )
+
+
+def test_connected_event_cleared_after_disconnect(monkeypatch):
+    """After a connect/drop cycle, the connected-event must be CLEAR.
+
+    Regression guard for the daemon CPU-spin: daemon._on_ble_connected loops on
+    `await ble.wait_connected()`. If run() leaves _connected_evt SET after the
+    link drops (clearing it only in a late finally, after slow BleakClient
+    teardown), the consumer wakes on the stale event, finds connected False, and
+    busy-loops with no await — pinning a core until teardown finally clears it.
+    run() must clear the event the instant it observes the drop.
+    """
+    monkeypatch.setattr(ble_mod, "BleakClient", _FakeClient)
+    ble = _make_ble()
+    # One find -> connect via _FakeClient (drops immediately), then stop.
+    finds = [_FakeDevice()]
+    h = _Harness(find_results=finds, reset_returns=[], stop_after_iterations=1)
+    h.install(ble)
+
+    _run(_drive(ble, h))
+
+    assert h.found_count == 1, "fake device should have connected once"
+    assert not ble._connected_evt.is_set(), (
+        "connected-event must be CLEAR after the link drops — if set, "
+        "daemon._on_ble_connected would busy-loop on the stale event (the spin)"
+    )
