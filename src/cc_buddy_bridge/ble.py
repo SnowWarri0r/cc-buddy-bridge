@@ -44,7 +44,12 @@ STABLE_CONNECTION_SECS = 30.0
 # callbacks while reporting status=Started. After this many consecutive
 # scan-timeout misses with the radio ON, we programmatically toggle the
 # radio off→on to recover without user intervention.
-RADIO_RESET_AFTER_MISSES = 2
+#
+# Kept deliberately conservative: power-cycling the radio briefly drops ALL
+# of the user's Bluetooth devices (mouse, keyboard, headphones), so we only
+# resort to it after a sustained run of misses (~25s at a 3s scan timeout +
+# base backoff) rather than reacting to a transient scan glitch.
+RADIO_RESET_AFTER_MISSES = 5
 
 # Handler for lines received from the stick (device → daemon).
 IncomingHandler = Callable[[dict[str, Any]], Awaitable[None]]
@@ -116,12 +121,22 @@ class BuddyBLE:
                     consecutive_misses += 1
                     log.info("no buddy device found, retrying in %.1fs (miss #%d)",
                              backoff, consecutive_misses)
+                    reset_fired = False
                     if consecutive_misses >= RADIO_RESET_AFTER_MISSES and not radio_reset_done:
-                        await self._try_reset_radio()
-                        radio_reset_done = True
+                        reset_fired = await self._try_reset_radio()
+                        # Only arm the once-per-cycle guard if we actually toggled
+                        # the radio — otherwise a no-op (non-Windows, denied, etc.)
+                        # would suppress future attempts for no reason.
+                        radio_reset_done = reset_fired
+                    if reset_fired:
+                        # Radio was power-cycled (which already slept ~4s). Give the
+                        # device a fresh fast attempt: reset miss-counter and backoff.
                         consecutive_misses = 0
                         backoff = RECONNECT_BACKOFF_BASE_SECS
                     else:
+                        # No reset happened (not yet at threshold, already done this
+                        # cycle, or a no-op platform/path). Back off normally with a
+                        # real sleep so we never busy-loop.
                         await asyncio.sleep(backoff)
                         backoff = min(backoff * 2, RECONNECT_BACKOFF_MAX_SECS)
                     continue
@@ -165,20 +180,28 @@ class BuddyBLE:
 
     # ---- internals ----
 
-    async def _try_reset_radio(self) -> None:
+    async def _try_reset_radio(self) -> bool:
         """Windows only: toggle the BT radio off→on to unstick the WinRT
         advertisement watcher. The watcher can silently stop delivering
         callbacks while reporting status=Started; a radio power-cycle clears
-        it without user intervention. No-op on non-Windows platforms."""
+        it without user intervention.
+
+        Returns ``True`` only if the radio was actually power-cycled, so the
+        caller can reset its miss-counter/backoff only when something was done.
+        Returns ``False`` on non-Windows platforms and on any path that did not
+        toggle the radio (no adapter, radio already off, denied, error) — the
+        caller then falls through to its normal backoff-with-sleep instead of
+        spinning. This keeps the Windows-specific recovery from bleeding into
+        the macOS/Linux backoff cadence (where it is always a no-op)."""
         if sys.platform != "win32":
-            return
+            return False
         try:
             from winrt.windows.devices.bluetooth import BluetoothAdapter
             from winrt.windows.devices.radios import RadioAccessStatus, RadioState
             adapter = await BluetoothAdapter.get_default_async()
             if adapter is None:
                 log.warning("radio reset: no BT adapter found, skipping")
-                return
+                return False
             radio = await adapter.get_radio_async()
             if radio.state != RadioState.ON:
                 log.info("radio reset: radio already off (state=%s), waiting for it to come back on", radio.state)
@@ -187,22 +210,28 @@ class BuddyBLE:
                     radio = await adapter.get_radio_async()
                     if radio.state == RadioState.ON:
                         break
-                return
-            log.warning("radio reset: %d consecutive scan misses — toggling BT radio to recover",
-                        RADIO_RESET_AFTER_MISSES)
+                return False
+            log.warning(
+                "radio reset: %d consecutive scan misses — power-cycling the BT "
+                "radio to recover. This briefly disconnects ALL Bluetooth devices "
+                "(mouse, keyboard, headphones), not just the buddy.",
+                RADIO_RESET_AFTER_MISSES,
+            )
             status = await radio.set_state_async(RadioState.OFF)
             if status != RadioAccessStatus.ALLOWED:
                 log.warning("radio reset: could not turn radio off (status=%s) — toggle BT manually", status)
-                return
+                return False
             await asyncio.sleep(2.0)
             status = await radio.set_state_async(RadioState.ON)
             if status != RadioAccessStatus.ALLOWED:
                 log.warning("radio reset: could not turn radio back on (status=%s)", status)
-                return
+                return False
             await asyncio.sleep(2.0)
             log.info("radio reset: BT radio cycled successfully")
+            return True
         except Exception as e:  # noqa: BLE001
             log.warning("radio reset failed: %s", e)
+            return False
 
     async def _find_device(self) -> Optional[BLEDevice]:
         if self.address is not None:
