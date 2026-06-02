@@ -19,6 +19,7 @@ from typing import Optional
 from cc_buddy_bridge import ble as ble_mod
 from cc_buddy_bridge.ble import (
     RADIO_RESET_AFTER_MISSES,
+    RADIO_RESET_MAX_ATTEMPTS,
     RECONNECT_BACKOFF_BASE_SECS,
     BuddyBLE,
 )
@@ -50,6 +51,7 @@ class _Harness:
         self.found_count = 0
         self._iterations = 0
         self._stop_after = stop_after_iterations
+        self.clock = 0.0  # fake monotonic clock, advanced by _drive
 
     def install(self, ble: BuddyBLE) -> None:
         ble._find_device = self._find_device  # type: ignore[method-assign]
@@ -178,20 +180,77 @@ def test_successful_reset_resets_backoff_to_base():
     assert h.sleeps[-1] == RECONNECT_BACKOFF_BASE_SECS
 
 
+def test_reset_retries_when_first_reset_does_not_help():
+    """BLOCKING-bug regression (review #1): if a successful power-cycle does NOT
+    revive the watcher and no connection happens, the reset must be RETRIED on a
+    later run of misses — not give up after one shot and strand the user.
+
+    Old behaviour: radio_reset_done latched True after the first reset and only
+    cleared on connect/disconnect, so a never-connecting daemon reset exactly
+    once then sat in max backoff forever (manual BT toggle needed — the thing
+    this feature removes).
+    """
+    ble = _make_ble()
+    # Never finds the device; reset always 'succeeds' (radio toggles) but it
+    # never actually revives discovery. Run long enough for several re-arm
+    # windows + cooldowns to elapse.
+    h = _Harness(find_results=[], reset_returns=[True] * 10, stop_after_iterations=80)
+    h.install(ble)
+
+    _run(_drive(ble, h))
+
+    # Must have retried beyond the first attempt, up to the cap.
+    assert 2 <= h.reset_calls <= RADIO_RESET_MAX_ATTEMPTS, (
+        f"reset must retry when it doesn't help (>=2) and respect the cap "
+        f"(<={RADIO_RESET_MAX_ATTEMPTS}); got {h.reset_calls}"
+    )
+
+
+def test_reset_attempts_capped():
+    """Reset must stop after RADIO_RESET_MAX_ATTEMPTS — never power-cycle the
+    user's whole radio in an unbounded loop."""
+    ble = _make_ble()
+    h = _Harness(find_results=[], reset_returns=[True] * 50, stop_after_iterations=200)
+    h.install(ble)
+
+    _run(_drive(ble, h))
+
+    assert h.reset_calls <= RADIO_RESET_MAX_ATTEMPTS, (
+        f"reset attempts must be capped at {RADIO_RESET_MAX_ATTEMPTS}, "
+        f"got {h.reset_calls}"
+    )
+
+
 async def _drive(ble: BuddyBLE, h: _Harness):
-    """Run the loop with asyncio.sleep patched to be instant + recorded."""
+    """Run the loop with asyncio.sleep instant+recorded, and a fake monotonic
+    clock that advances by each sleep's duration.
+
+    Advancing the clock matters for the radio-reset cooldown: the reset re-arm
+    is gated on RADIO_RESET_COOLDOWN_SECS of monotonic time, so without
+    advancing the clock the cooldown would never elapse and re-arm would never
+    fire in tests. Each recorded sleep pushes the fake clock forward, plus a
+    small fixed step per loop so even zero-sleep iterations make progress."""
     real_sleep = asyncio.sleep
+    h.clock = 1000.0  # arbitrary non-zero start
 
     async def _fast_sleep(secs):
         h.sleeps.append(secs)
+        h.clock += max(secs, 0.0)
         await real_sleep(0)
 
-    orig = ble_mod.asyncio.sleep
+    def _fake_monotonic():
+        h.clock += 0.001  # tiny per-call advance so ordering is monotonic
+        return h.clock
+
+    orig_sleep = ble_mod.asyncio.sleep
+    orig_mono = ble_mod.time.monotonic
     ble_mod.asyncio.sleep = _fast_sleep  # type: ignore[assignment]
+    ble_mod.time.monotonic = _fake_monotonic  # type: ignore[assignment]
     try:
         await ble.run()
     finally:
-        ble_mod.asyncio.sleep = orig  # type: ignore[assignment]
+        ble_mod.asyncio.sleep = orig_sleep  # type: ignore[assignment]
+        ble_mod.time.monotonic = orig_mono  # type: ignore[assignment]
 
 
 # ---- disconnect-reset path -----------------------------------------------

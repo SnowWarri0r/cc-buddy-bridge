@@ -30,7 +30,13 @@ log = logging.getLogger(__name__)
 
 # Default scan parameters.
 DEFAULT_NAME_PREFIX = "Claude"
-SCAN_TIMEOUT_SECS = 3.0
+# Windows uses a short 3s scan: the radio-reset recovery (below) keys its
+# threshold timing off fast scan cycles, and BLE adverts arrive every
+# 100-500ms so 3s is ample to catch a present device. Other platforms keep the
+# original 10s for more discovery margin in congested 2.4GHz environments or
+# with long advertising intervals — the short timeout was a Windows-specific
+# need and shouldn't narrow macOS/Linux discovery.
+SCAN_TIMEOUT_SECS = 3.0 if sys.platform == "win32" else 10.0
 
 # Exponential backoff for reconnection: if the device is resetting or rejecting
 # us, we don't want to hammer it. After each failure we double the wait up to
@@ -50,6 +56,16 @@ STABLE_CONNECTION_SECS = 30.0
 # resort to it after a sustained run of misses (~25s at a 3s scan timeout +
 # base backoff) rather than reacting to a transient scan glitch.
 RADIO_RESET_AFTER_MISSES = 5
+
+# A single power-cycle doesn't always revive the watcher. Re-arm the reset
+# after each fresh run of RADIO_RESET_AFTER_MISSES misses, but cap the total
+# attempts per disconnected spell and enforce a cooldown between them — so a
+# genuinely dead watcher is retried (instead of giving up after one shot and
+# stranding the user back at manual BT-toggling), without power-cycling the
+# user's whole radio on a tight loop. The counter and cap reset on a successful
+# connect. After the cap we stop trying and fall back to plain backoff.
+RADIO_RESET_MAX_ATTEMPTS = 3
+RADIO_RESET_COOLDOWN_SECS = 120.0
 
 # Handler for lines received from the stick (device → daemon).
 IncomingHandler = Callable[[dict[str, Any]], Awaitable[None]]
@@ -112,7 +128,15 @@ class BuddyBLE:
         hammered every 3 seconds."""
         backoff = RECONNECT_BACKOFF_BASE_SECS
         consecutive_misses = 0
-        radio_reset_done = False  # reset once per connection attempt cycle
+        # Radio-reset recovery state. Re-armed by the miss counter (not a
+        # one-shot flag): another reset is allowed once misses reach a fresh
+        # RADIO_RESET_AFTER_MISSES beyond the last reset, capped at
+        # RADIO_RESET_MAX_ATTEMPTS and gated by RADIO_RESET_COOLDOWN_SECS, until
+        # a successful connect clears it. This makes a dead watcher retryable
+        # instead of giving up after one shot.
+        reset_attempts = 0
+        misses_at_last_reset = 0
+        last_reset_ts = 0.0
         while not self._stop.is_set():
             connect_ts: float | None = None
             try:
@@ -121,27 +145,45 @@ class BuddyBLE:
                     consecutive_misses += 1
                     log.info("no buddy device found, retrying in %.1fs (miss #%d)",
                              backoff, consecutive_misses)
+                    # Eligible for a radio reset when: we've hit a fresh run of
+                    # RADIO_RESET_AFTER_MISSES since the last attempt, we're under
+                    # the attempt cap, and the cooldown has elapsed.
+                    now = time.monotonic()
+                    eligible = (
+                        consecutive_misses - misses_at_last_reset >= RADIO_RESET_AFTER_MISSES
+                        and reset_attempts < RADIO_RESET_MAX_ATTEMPTS
+                        and (last_reset_ts == 0.0 or now - last_reset_ts >= RADIO_RESET_COOLDOWN_SECS)
+                    )
                     reset_fired = False
-                    if consecutive_misses >= RADIO_RESET_AFTER_MISSES and not radio_reset_done:
+                    if eligible:
                         reset_fired = await self._try_reset_radio()
-                        # Only arm the once-per-cycle guard if we actually toggled
-                        # the radio — otherwise a no-op (non-Windows, denied, etc.)
-                        # would suppress future attempts for no reason.
-                        radio_reset_done = reset_fired
+                        if reset_fired:
+                            reset_attempts += 1
+                            misses_at_last_reset = consecutive_misses
+                            last_reset_ts = time.monotonic()
+                            if reset_attempts >= RADIO_RESET_MAX_ATTEMPTS:
+                                log.warning(
+                                    "radio reset: %d attempts made without recovery — "
+                                    "giving up auto-reset; may need a manual BT toggle",
+                                    reset_attempts,
+                                )
                     if reset_fired:
-                        # Radio was power-cycled (which already slept ~4s). Give the
-                        # device a fresh fast attempt: reset miss-counter and backoff.
-                        consecutive_misses = 0
+                        # Radio was power-cycled (already slept ~4s inside). Give the
+                        # device a fresh fast attempt at the base backoff.
                         backoff = RECONNECT_BACKOFF_BASE_SECS
-                    else:
-                        # No reset happened (not yet at threshold, already done this
-                        # cycle, or a no-op platform/path). Back off normally with a
-                        # real sleep so we never busy-loop.
-                        await asyncio.sleep(backoff)
-                        backoff = min(backoff * 2, RECONNECT_BACKOFF_MAX_SECS)
+                        continue
+                    # No reset this iteration (below threshold, capped, cooling
+                    # down, or a no-op platform/path). Back off with a real sleep
+                    # so we never busy-loop.
+                    await asyncio.sleep(backoff)
+                    backoff = min(backoff * 2, RECONNECT_BACKOFF_MAX_SECS)
                     continue
                 consecutive_misses = 0
-                radio_reset_done = False  # clear so next disconnection gets a reset attempt
+                # Successful find: clear all reset state so the next disconnected
+                # spell starts fresh and is fully retryable again.
+                reset_attempts = 0
+                misses_at_last_reset = 0
+                last_reset_ts = 0.0
                 log.info("connecting to %s (%s)", device.name, device.address)
                 async with BleakClient(device) as client:
                     self._client = client
@@ -164,7 +206,12 @@ class BuddyBLE:
                     self._connected_evt.clear()
                     lifetime = time.monotonic() - connect_ts
                     log.info("disconnected after %.1fs", lifetime)
-                    radio_reset_done = False  # allow reset on next scan cycle after disconnect
+                    # Clear reset state so the post-disconnect reconnect spell is
+                    # fully retryable from scratch (fresh attempt budget + no
+                    # stale cooldown).
+                    reset_attempts = 0
+                    misses_at_last_reset = 0
+                    last_reset_ts = 0.0
             except Exception as e:  # noqa: BLE001
                 log.warning("ble connection error: %s", e)
             finally:
@@ -213,12 +260,12 @@ class BuddyBLE:
                 return False
             radio = await adapter.get_radio_async()
             if radio.state != RadioState.ON:
-                log.info("radio reset: radio already off (state=%s), waiting for it to come back on", radio.state)
-                for _ in range(20):
-                    await asyncio.sleep(1.0)
-                    radio = await adapter.get_radio_async()
-                    if radio.state == RadioState.ON:
-                        break
+                # Radio is off (user likely turned BT off deliberately). Don't
+                # block waiting for it — return immediately. The connect loop's
+                # normal backoff keeps re-checking, and the reset cooldown stops
+                # this from being re-attempted on a tight loop. (Previously this
+                # spun a 20s wait every eligible cycle while BT was off.)
+                log.info("radio reset: radio is %s, not powering — leaving it to the user", radio.state)
                 return False
             log.warning(
                 "radio reset: %d consecutive scan misses — power-cycling the BT "
