@@ -261,10 +261,13 @@ class BuddyBLE:
             radio = await adapter.get_radio_async()
             if radio.state != RadioState.ON:
                 # Radio is off (user likely turned BT off deliberately). Don't
-                # block waiting for it — return immediately. The connect loop's
-                # normal backoff keeps re-checking, and the reset cooldown stops
-                # this from being re-attempted on a tight loop. (Previously this
-                # spun a 20s wait every eligible cycle while BT was off.)
+                # block waiting for it — return immediately. We return False, so
+                # the caller does NOT update last_reset_ts and the cooldown does
+                # not engage on this path; what prevents a tight loop is the
+                # caller's `await asyncio.sleep(backoff)` on a no-reset miss. The
+                # cost while BT stays off is one cheap WinRT state query per
+                # backoff cycle, which is fine. (Previously this branch spun a
+                # 20s wait every eligible cycle.)
                 log.info("radio reset: radio is %s, not powering — leaving it to the user", radio.state)
                 return False
             log.warning(
