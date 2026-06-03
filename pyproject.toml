@@ -21,6 +21,13 @@ classifiers = [
 dependencies = [
     "bleak>=0.22",
     "watchfiles>=0.21",
+    # Windows-only: used by BuddyBLE._try_reset_radio to power-cycle the BT
+    # radio when the WinRT advertisement watcher silently stops delivering
+    # callbacks. bleak pulls in some winrt-* packages transitively, but not
+    # Radios, so declare both we import from explicitly (gated to win32 so
+    # macOS/Linux installs don't try to pull Windows projection packages).
+    "winrt-Windows.Devices.Bluetooth>=2.0; sys_platform == 'win32'",
+    "winrt-Windows.Devices.Radios>=2.0; sys_platform == 'win32'",
 ]
 
 [project.optional-dependencies]

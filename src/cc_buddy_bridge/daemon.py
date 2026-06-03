@@ -163,6 +163,13 @@ class Daemon:
         a status poll so we learn the link's encryption state right away."""
         while not self._shutdown.is_set():
             await self.ble.wait_connected()
+            # Guard against a stale connected-event: if we woke but the link is
+            # already gone (the event was set but cleared a beat later, or a
+            # teardown race), don't fire sends into a dead link and spin. Sleep
+            # briefly and re-wait instead of looping with no delay.
+            if not self.ble.connected:
+                await asyncio.sleep(0.5)
+                continue
             await self.ble.send(build_time_sync())
             await self._push_heartbeat(force=True)
             await self.ble.send({"cmd": "status"})

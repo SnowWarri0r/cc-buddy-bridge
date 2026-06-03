@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sys
 import time
 from typing import Any, Awaitable, Callable, Optional
 
@@ -29,7 +30,13 @@ log = logging.getLogger(__name__)
 
 # Default scan parameters.
 DEFAULT_NAME_PREFIX = "Claude"
-SCAN_TIMEOUT_SECS = 10.0
+# Windows uses a short 3s scan: the radio-reset recovery (below) keys its
+# threshold timing off fast scan cycles, and BLE adverts arrive every
+# 100-500ms so 3s is ample to catch a present device. Other platforms keep the
+# original 10s for more discovery margin in congested 2.4GHz environments or
+# with long advertising intervals — the short timeout was a Windows-specific
+# need and shouldn't narrow macOS/Linux discovery.
+SCAN_TIMEOUT_SECS = 3.0 if sys.platform == "win32" else 10.0
 
 # Exponential backoff for reconnection: if the device is resetting or rejecting
 # us, we don't want to hammer it. After each failure we double the wait up to
@@ -38,6 +45,27 @@ SCAN_TIMEOUT_SECS = 10.0
 RECONNECT_BACKOFF_BASE_SECS = 3.0
 RECONNECT_BACKOFF_MAX_SECS = 60.0
 STABLE_CONNECTION_SECS = 30.0
+
+# Windows: BluetoothLEAdvertisementWatcher can silently stop delivering
+# callbacks while reporting status=Started. After this many consecutive
+# scan-timeout misses with the radio ON, we programmatically toggle the
+# radio off→on to recover without user intervention.
+#
+# Kept deliberately conservative: power-cycling the radio briefly drops ALL
+# of the user's Bluetooth devices (mouse, keyboard, headphones), so we only
+# resort to it after a sustained run of misses (~25s at a 3s scan timeout +
+# base backoff) rather than reacting to a transient scan glitch.
+RADIO_RESET_AFTER_MISSES = 5
+
+# A single power-cycle doesn't always revive the watcher. Re-arm the reset
+# after each fresh run of RADIO_RESET_AFTER_MISSES misses, but cap the total
+# attempts per disconnected spell and enforce a cooldown between them — so a
+# genuinely dead watcher is retried (instead of giving up after one shot and
+# stranding the user back at manual BT-toggling), without power-cycling the
+# user's whole radio on a tight loop. The counter and cap reset on a successful
+# connect. After the cap we stop trying and fall back to plain backoff.
+RADIO_RESET_MAX_ATTEMPTS = 3
+RADIO_RESET_COOLDOWN_SECS = 120.0
 
 # Handler for lines received from the stick (device → daemon).
 IncomingHandler = Callable[[dict[str, Any]], Awaitable[None]]
@@ -99,15 +127,63 @@ class BuddyBLE:
         a reset loop, bonding confusion) gets breathing room instead of being
         hammered every 3 seconds."""
         backoff = RECONNECT_BACKOFF_BASE_SECS
+        consecutive_misses = 0
+        # Radio-reset recovery state. Re-armed by the miss counter (not a
+        # one-shot flag): another reset is allowed once misses reach a fresh
+        # RADIO_RESET_AFTER_MISSES beyond the last reset, capped at
+        # RADIO_RESET_MAX_ATTEMPTS and gated by RADIO_RESET_COOLDOWN_SECS, until
+        # a successful connect clears it. This makes a dead watcher retryable
+        # instead of giving up after one shot.
+        reset_attempts = 0
+        misses_at_last_reset = 0
+        last_reset_ts = 0.0
         while not self._stop.is_set():
             connect_ts: float | None = None
             try:
                 device = await self._find_device()
                 if device is None:
-                    log.info("no buddy device found, retrying in %.1fs", backoff)
+                    consecutive_misses += 1
+                    log.info("no buddy device found, retrying in %.1fs (miss #%d)",
+                             backoff, consecutive_misses)
+                    # Eligible for a radio reset when: we've hit a fresh run of
+                    # RADIO_RESET_AFTER_MISSES since the last attempt, we're under
+                    # the attempt cap, and the cooldown has elapsed.
+                    now = time.monotonic()
+                    eligible = (
+                        consecutive_misses - misses_at_last_reset >= RADIO_RESET_AFTER_MISSES
+                        and reset_attempts < RADIO_RESET_MAX_ATTEMPTS
+                        and (last_reset_ts == 0.0 or now - last_reset_ts >= RADIO_RESET_COOLDOWN_SECS)
+                    )
+                    reset_fired = False
+                    if eligible:
+                        reset_fired = await self._try_reset_radio()
+                        if reset_fired:
+                            reset_attempts += 1
+                            misses_at_last_reset = consecutive_misses
+                            last_reset_ts = time.monotonic()
+                            if reset_attempts >= RADIO_RESET_MAX_ATTEMPTS:
+                                log.warning(
+                                    "radio reset: %d attempts made without recovery — "
+                                    "giving up auto-reset; may need a manual BT toggle",
+                                    reset_attempts,
+                                )
+                    if reset_fired:
+                        # Radio was power-cycled (already slept ~4s inside). Give the
+                        # device a fresh fast attempt at the base backoff.
+                        backoff = RECONNECT_BACKOFF_BASE_SECS
+                        continue
+                    # No reset this iteration (below threshold, capped, cooling
+                    # down, or a no-op platform/path). Back off with a real sleep
+                    # so we never busy-loop.
                     await asyncio.sleep(backoff)
                     backoff = min(backoff * 2, RECONNECT_BACKOFF_MAX_SECS)
                     continue
+                consecutive_misses = 0
+                # Successful find: clear all reset state so the next disconnected
+                # spell starts fresh and is fully retryable again.
+                reset_attempts = 0
+                misses_at_last_reset = 0
+                last_reset_ts = 0.0
                 log.info("connecting to %s (%s)", device.name, device.address)
                 async with BleakClient(device) as client:
                     self._client = client
@@ -119,8 +195,23 @@ class BuddyBLE:
                     # Hold the connection open until it drops or we're told to stop.
                     while client.is_connected and not self._stop.is_set():
                         await asyncio.sleep(1.0)
+                    # Clear the connected event the instant we observe the drop —
+                    # NOT in the finally below. BleakClient.__aexit__ teardown can
+                    # take a while, and during that window `connected` is already
+                    # False while the event is still set. A consumer that loops on
+                    # wait_connected() (daemon._on_ble_connected) would then wake on
+                    # the stale event, find connected False, and busy-loop with no
+                    # await until teardown finally clears it. Clear it here to close
+                    # that race.
+                    self._connected_evt.clear()
                     lifetime = time.monotonic() - connect_ts
                     log.info("disconnected after %.1fs", lifetime)
+                    # Clear reset state so the post-disconnect reconnect spell is
+                    # fully retryable from scratch (fresh attempt budget + no
+                    # stale cooldown).
+                    reset_attempts = 0
+                    misses_at_last_reset = 0
+                    last_reset_ts = 0.0
             except Exception as e:  # noqa: BLE001
                 log.warning("ble connection error: %s", e)
             finally:
@@ -144,6 +235,59 @@ class BuddyBLE:
                 pass
 
     # ---- internals ----
+
+    async def _try_reset_radio(self) -> bool:
+        """Windows only: toggle the BT radio off→on to unstick the WinRT
+        advertisement watcher. The watcher can silently stop delivering
+        callbacks while reporting status=Started; a radio power-cycle clears
+        it without user intervention.
+
+        Returns ``True`` only if the radio was actually power-cycled, so the
+        caller can reset its miss-counter/backoff only when something was done.
+        Returns ``False`` on non-Windows platforms and on any path that did not
+        toggle the radio (no adapter, radio already off, denied, error) — the
+        caller then falls through to its normal backoff-with-sleep instead of
+        spinning. This keeps the Windows-specific recovery from bleeding into
+        the macOS/Linux backoff cadence (where it is always a no-op)."""
+        if sys.platform != "win32":
+            return False
+        try:
+            from winrt.windows.devices.bluetooth import BluetoothAdapter
+            from winrt.windows.devices.radios import RadioAccessStatus, RadioState
+            adapter = await BluetoothAdapter.get_default_async()
+            if adapter is None:
+                log.warning("radio reset: no BT adapter found, skipping")
+                return False
+            radio = await adapter.get_radio_async()
+            if radio.state != RadioState.ON:
+                # Radio is off (user likely turned BT off deliberately). Don't
+                # block waiting for it — return immediately. The connect loop's
+                # normal backoff keeps re-checking, and the reset cooldown stops
+                # this from being re-attempted on a tight loop. (Previously this
+                # spun a 20s wait every eligible cycle while BT was off.)
+                log.info("radio reset: radio is %s, not powering — leaving it to the user", radio.state)
+                return False
+            log.warning(
+                "radio reset: %d consecutive scan misses — power-cycling the BT "
+                "radio to recover. This briefly disconnects ALL Bluetooth devices "
+                "(mouse, keyboard, headphones), not just the buddy.",
+                RADIO_RESET_AFTER_MISSES,
+            )
+            status = await radio.set_state_async(RadioState.OFF)
+            if status != RadioAccessStatus.ALLOWED:
+                log.warning("radio reset: could not turn radio off (status=%s) — toggle BT manually", status)
+                return False
+            await asyncio.sleep(2.0)
+            status = await radio.set_state_async(RadioState.ON)
+            if status != RadioAccessStatus.ALLOWED:
+                log.warning("radio reset: could not turn radio back on (status=%s)", status)
+                return False
+            await asyncio.sleep(2.0)
+            log.info("radio reset: BT radio cycled successfully")
+            return True
+        except Exception as e:  # noqa: BLE001
+            log.warning("radio reset failed: %s", e)
+            return False
 
     async def _find_device(self) -> Optional[BLEDevice]:
         if self.address is not None:
