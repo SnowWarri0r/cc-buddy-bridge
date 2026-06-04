@@ -27,7 +27,7 @@ buddy ファームウェアは公式には Claude for macOS/Windows のデスク
 - **ワンコマンドのインストール + 自動起動** —— `cc-buddy-bridge install --service` が OS ごとに正しいバックエンドを選びます（macOS は launchd、Linux は systemd ユーザーユニット、Windows はタスクスケジューラ）。
 - **カスタム GIF キャラクター** —— `cc-buddy-bridge push-character ./pack/` でフレームの入ったフォルダを BLE 経由でアップロードします。チャンク化されたフロー制御つき。
 - **新バージョン通知 + 自動更新** —— デーモンが GitHub releases を 1 日 1 回バックグラウンドで取得し、新タグがあれば hud に `↑ vX.Y.Z` を表示。`cc-buddy-bridge check-update` で明示チェック、`cc-buddy-bridge update` で pull + 再インストール + デーモン再起動まで一気に実行。ポーリング無効化は `CC_BUDDY_BRIDGE_NO_UPDATE_CHECK=1`。
-- **stick での CJK 表示（オプション）** —— フォーク専用ファームウェア [SnowWarri0r/claude-desktop-buddy](https://github.com/SnowWarri0r/claude-desktop-buddy) が ASCII 限定の標準フォントを [Fusion Pixel Font](https://github.com/TakWolf/fusion-pixel-font)（OFL）12×12 グリフに置き換えて簡体中国語を描画（繁体中国語 / **日本語は計画中**）。`CC_BUDDY_CJK_TARGET=zh-CN` を設定するとブリッジが自動で GBK ワイヤエンコーディングに切り替わります。詳細は [stick に CJK 表示](#stick-に-cjk-表示オプション)。
+- **stick での CJK 表示（オプション）** —— フォーク専用ファームウェア [SnowWarri0r/claude-desktop-buddy](https://github.com/SnowWarri0r/claude-desktop-buddy) が ASCII 限定の標準フォントを [Fusion Pixel Font](https://github.com/TakWolf/fusion-pixel-font)（OFL）12×12 グリフに置き換えて簡体中国語・日本語を描画（繁体中国語は計画中）。`CC_BUDDY_CJK_TARGET=zh-CN`（または `ja`）を設定するとブリッジが自動で対応するワイヤエンコーディングに切り替わります。詳細は [stick に CJK 表示](#stick-に-cjk-表示オプション)。
 
 ## 仕組み
 
@@ -398,13 +398,13 @@ stock ファームウェアのユーザーには影響しません —— ブリ
 | --- | --- | --- | --- |
 | 簡体中国語 (zh-CN) | `m5stickc-plus-cjk-zh-cn` | `gbk` | ✅ 利用可能 — GB2312 ゾーン 1-55（記号 + Level 1 漢字）、~4300 字 |
 | 繁体中国語 (zh-TW) | `m5stickc-plus-cjk-zh-tw` | `big5` | 🚧 計画中 — ブリッジ codec は配線済み、ファームビルドは簡体グリフ流用 |
-| **日本語 (ja)** | `m5stickc-plus-cjk-ja` | `shift_jis` | 🚧 **計画中** — 同上、JIS X 0208 グリフ抽出は未実装 |
+| **日本語 (ja)** | `m5stickc-plus-cjk-ja` | `shift_jis` | ✅ **利用可能** — JIS X 0208 1-47 区（かな + Level 1 漢字）、~4400 字。半角カタカナは ASCII フォールバック |
 
-日本語版は順番待ちです。Fusion Pixel Font の ja BDF は既に
-取得済みなので、変換スクリプトを ``shift_jis`` codec に切り替えれば
-スクラッチから書き直しは不要。Issue で push してくれれば優先度を上げます。
+### 有効化手順（簡体中国語 / 日本語）
 
-### 有効化手順（簡体中国語向け。日本語版が来たら同じ手順）
+下記は簡体中国語の例です。**日本語**の場合は `feat/cjk-display-ja` ブランチ、
+`m5stickc-plus-cjk-ja` ビルド、`CC_BUDDY_CJK_TARGET=ja`（ワイヤ codec は `shift_jis`）
+に読み替えてください。手順はまったく同じです。
 
 1. **フォークの CJK ファームウェアをフラッシュ。**
    [SnowWarri0r/claude-desktop-buddy](https://github.com/SnowWarri0r/claude-desktop-buddy)
@@ -610,7 +610,7 @@ macOS 側はユーザーが手動で **システム設定 → Bluetooth → Clau
 
 **テスト + CI**
 
-* state、protocol、installer、hud、matchers、JSONL tailer、フォルダプッシュ、各サービスバックエンドをカバーする 98 ユニットテスト
+* state、protocol、installer、hud、matchers、JSONL tailer、フォルダプッシュ、各サービスバックエンド、BLE ラジオ復帰をカバーする 212 ユニットテスト
 * GitHub Actions マトリクス（Python 3.11 / 3.12 / 3.13）
 
 **Backlog**
@@ -636,7 +636,7 @@ python3.12 -m venv .venv
 ### テストと lint
 
 ```bash
-.venv/bin/pytest -q                  # ~140 件、1 秒以内に完走
+.venv/bin/pytest -q                  # ~210 件、1 秒以内に完走
 .venv/bin/ruff check src/ tests/     # lint（CI が PR ごとに実行）
 ```
 

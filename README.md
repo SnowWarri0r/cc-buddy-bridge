@@ -28,7 +28,7 @@ you approve or deny right from the stick's buttons.
 - **One-command install + autostart** — `cc-buddy-bridge install --service` picks the right backend per OS: launchd (macOS), systemd user unit (Linux), Task Scheduler (Windows).
 - **Custom GIF characters** — `cc-buddy-bridge push-character ./pack/` uploads a folder of frames over BLE with chunked flow control.
 - **Release notifications + self-update** — daemon pings GitHub releases once a day; hud renders `↑ vX.Y.Z` when a newer tag exists. `cc-buddy-bridge check-update` for a one-off check, `cc-buddy-bridge update` to actually pull + reinstall + restart the daemon. Opt out of polling with `CC_BUDDY_BRIDGE_NO_UPDATE_CHECK=1`.
-- **Optional CJK display on the stick** — fork-only firmware variants render Simplified Chinese (and soon Traditional Chinese / Japanese) at 12×12 px using [Fusion Pixel Font](https://github.com/TakWolf/fusion-pixel-font) (OFL). Bridge auto-switches its wire codec when you set `CC_BUDDY_CJK_TARGET=zh-CN`. See [CJK display on the stick](#cjk-display-on-the-stick-optional).
+- **Optional CJK display on the stick** — fork-only firmware variants render Simplified Chinese and Japanese (Traditional Chinese still planned) at 12×12 px using [Fusion Pixel Font](https://github.com/TakWolf/fusion-pixel-font) (OFL). Bridge auto-switches its wire codec when you set `CC_BUDDY_CJK_TARGET=zh-CN` (or `ja`). See [CJK display on the stick](#cjk-display-on-the-stick-optional).
 
 ## How it works
 
@@ -415,9 +415,13 @@ keeps its conservative ASCII sanitizer until you tell it otherwise.
 | --- | --- | --- | --- |
 | **Simplified Chinese (zh-CN)** | `m5stickc-plus-cjk-zh-cn` | `gbk` | ✅ Ready — GB2312 zones 1-55 (symbols + Level 1 hanzi), ~4300 glyphs |
 | Traditional Chinese (zh-TW) | `m5stickc-plus-cjk-zh-tw` | `big5` | 🚧 Planned — bridge codec wired; firmware build still uses Simplified glyphs |
-| Japanese (ja) | `m5stickc-plus-cjk-ja` | `shift_jis` | 🚧 Planned — same |
+| **Japanese (ja)** | `m5stickc-plus-cjk-ja` | `shift_jis` | ✅ Ready — JIS X 0208 rows 1-47 (kana + Level 1 kanji), ~4400 glyphs; half-width katakana falls through to ASCII |
 
-### How to enable (Simplified Chinese)
+### How to enable (Simplified Chinese / Japanese)
+
+The worked example below is for Simplified Chinese. For **Japanese**, substitute the
+`feat/cjk-display-ja` branch, the `m5stickc-plus-cjk-ja` build, and `CC_BUDDY_CJK_TARGET=ja`
+(wire codec `shift_jis`) — the steps are otherwise identical.
 
 1. **Flash the fork's CJK firmware variant.** Clone
    [SnowWarri0r/claude-desktop-buddy](https://github.com/SnowWarri0r/claude-desktop-buddy),
@@ -628,7 +632,7 @@ Daily-driver complete — the author runs it on every Claude Code session.
 
 **Tests + CI**
 
-* 98 unit tests covering state, protocol, installer, hud, matchers, JSONL tailer, folder push, service backends
+* 212 unit tests covering state, protocol, installer, hud, matchers, JSONL tailer, folder push, service backends, BLE radio recovery
 * GitHub Actions matrix across Python 3.11 / 3.12 / 3.13
 
 **Backlog**
@@ -655,7 +659,7 @@ The `[dev]` extra pulls in `pytest` + `ruff` (the only dev deps).
 ### Test & lint
 
 ```bash
-.venv/bin/pytest -q                  # ~140 tests, finishes in <1s
+.venv/bin/pytest -q                  # ~210 tests, finishes in <1s
 .venv/bin/ruff check src/ tests/     # lint (CI runs this on every PR)
 ```
 
