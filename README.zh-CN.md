@@ -26,7 +26,7 @@ buddy 固件官方只跟 Claude for macOS/Windows 桌面端配对。本项目让
 - **一行命令安装 + 开机自启** —— `cc-buddy-bridge install --service` 自动选对每个 OS 的后端：macOS 用 launchd、Linux 用 systemd 用户级 unit、Windows 用任务计划程序。
 - **自定义 GIF 角色** —— `cc-buddy-bridge push-character ./pack/` 通过 BLE 上传一整个动画包，自带分块流控。
 - **新版本提示 + 自更新** —— daemon 每天后台轮询一次 GitHub releases；有新版时 hud 多一段 `↑ vX.Y.Z`。`cc-buddy-bridge check-update` 显式查询，`cc-buddy-bridge update` 一键拉新代码 + 重装 + 重启 daemon。轮询用 `CC_BUDDY_BRIDGE_NO_UPDATE_CHECK=1` 关闭。
-- **stick 上显示中文（可选，**强烈推荐**）** —— 配套 fork 固件 [SnowWarri0r/claude-desktop-buddy `feat/cjk-display-zh-cn`](https://github.com/SnowWarri0r/claude-desktop-buddy/tree/feat/cjk-display-zh-cn) 把 stock 固件那个 ASCII-only 字体换成 [Fusion Pixel Font](https://github.com/TakWolf/fusion-pixel-font)（OFL）12×12 字形，简体中文直接渲染（繁中 / 日文规划中）。设 `CC_BUDDY_CJK_TARGET=zh-CN` 后桥端自动切 GBK wire 编码。详见 [stick 上显示中文](#stick-上显示中文可选强烈推荐)。
+- **stick 上显示中文（可选，**强烈推荐**）** —— 配套 fork 固件 [SnowWarri0r/claude-desktop-buddy `feat/cjk-display-zh-cn`](https://github.com/SnowWarri0r/claude-desktop-buddy/tree/feat/cjk-display-zh-cn) 把 stock 固件那个 ASCII-only 字体换成 [Fusion Pixel Font](https://github.com/TakWolf/fusion-pixel-font)（OFL）12×12 字形，简体中文、日文直接渲染（繁中仍在规划中）。设 `CC_BUDDY_CJK_TARGET=zh-CN`（或 `ja`）后桥端自动切对应 wire 编码。详见 [stick 上显示中文](#stick-上显示中文可选强烈推荐)。
 
 ## 工作原理
 
@@ -375,9 +375,12 @@ Windows 在 `%LOCALAPPDATA%\cc-buddy-bridge\update_check.json`。
 | --- | --- | --- | --- |
 | **简体中文 (zh-CN)** | `m5stickc-plus-cjk-zh-cn` | `gbk` | ✅ **可用** —— GB2312 zones 1-55（符号 + Level 1 汉字），约 4300 字形 |
 | 繁体中文 (zh-TW) | `m5stickc-plus-cjk-zh-tw` | `big5` | 🚧 规划中——桥端 codec 已就位；固件 build 还用简体字形 |
-| 日文 (ja) | `m5stickc-plus-cjk-ja` | `shift_jis` | 🚧 规划中——同上 |
+| **日文 (ja)** | `m5stickc-plus-cjk-ja` | `shift_jis` | ✅ **可用** —— JIS X 0208 行 1-47（假名 + Level 1 汉字），约 4400 字形；半角片假名回退到 ASCII |
 
-### 启用步骤（简体中文）
+### 启用步骤（简体中文 / 日文）
+
+下面以简体中文为例。**日文**请把 `feat/cjk-display-ja` 分支、`m5stickc-plus-cjk-ja`
+build、`CC_BUDDY_CJK_TARGET=ja`（wire codec `shift_jis`）对应替换，其余步骤完全一样。
 
 1. **刷 fork 的 CJK 固件变体**。把
    [SnowWarri0r/claude-desktop-buddy](https://github.com/SnowWarri0r/claude-desktop-buddy)
@@ -559,7 +562,7 @@ transcript 文件，新助手记录一落盘（通常 <500 ms）就触发 `on_as
 
 **测试与 CI**
 
-* 98 个单元测试，覆盖 state、protocol、installer、hud、matchers、JSONL tailer、文件夹推送、各服务后端
+* 212 个单元测试，覆盖 state、protocol、installer、hud、matchers、JSONL tailer、文件夹推送、各服务后端、BLE 射频恢复
 * GitHub Actions 跨 Python 3.11 / 3.12 / 3.13 三档运行
 
 **Backlog**
@@ -584,7 +587,7 @@ python3.12 -m venv .venv
 ### 测试与 lint
 
 ```bash
-.venv/bin/pytest -q                  # ~140 个测试，<1s 跑完
+.venv/bin/pytest -q                  # ~210 个测试，<1s 跑完
 .venv/bin/ruff check src/ tests/     # lint（PR CI 必跑）
 ```
 
